@@ -8,17 +8,17 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "qzonearchive";
-  version = "1.0.3";
+  version = "1.0.5";
 
   src = lib.cleanSource ../.;
 
   cargoRoot = "src-tauri";
   buildAndTestSubdir = "src-tauri";
 
-  cargoHash = "sha256-9bdsDzJZOIF4nVQGib8vafv8Eb8pQRSfzMMyaXJywzs=";
+  cargoHash = "sha256-Q4WQpfFo4fqtRbgTcyP/80ogt/G/NpbdhLuRX16OMwk=";
 
   npmDeps = pkgs.fetchNpmDeps {
-    name = "qzonearchive-1.0.3-npm-deps";
+    name = "qzonearchive-1.0.5-npm-deps";
     src = lib.cleanSource ../.;
     hash = "sha256-24RbBcv3OY1LvWCaXDbvT5Bou3uw9imus5iroD1WUF4=";
   };
