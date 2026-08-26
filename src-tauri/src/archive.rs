@@ -1423,6 +1423,8 @@ struct VisibleSyncSummary {
     pages: u32,
     moments: u64,
     saved: u64,
+    total: u64,
+    owner_name: Option<String>,
 }
 
 async fn sync_visible_moments(
@@ -1448,9 +1450,25 @@ async fn sync_visible_moments(
         if let Some(retry_at) = reserve_archive_page(app, owner_uin)? {
             return Err(format!("ARCHIVE_RATE_LIMIT:{retry_at}"));
         }
-        let page = qzone::fetch_visible_moments(login, pos, 40).await?;
+        let page = qzone::fetch_visible_moments(login, pos, 30).await?;
         if page.moment_count == 0 {
+            if u64::from(pos) < page.total {
+                return Err(format!(
+                    "本人说说分页在 offset {pos} 提前返回空页（接口报告共 {} 条），已停止以避免误报归档完成",
+                    page.total
+                ));
+            }
             return Ok(summary);
+        }
+        summary.total = page.total;
+        if summary.owner_name.is_none() {
+            summary.owner_name = page.feeds.iter().find_map(|feed| {
+                let uin = feed.pointer("/original/cell_userinfo/user/uin")?;
+                let uin = uin.as_str().map(str::to_owned).or_else(|| uin.as_i64().map(|v| v.to_string()))?;
+                (uin == owner_uin)
+                    .then(|| text_at(feed, "/original/cell_userinfo/user/nickname"))
+                    .flatten()
+            });
         }
         let feed_count = page.feeds.len() as u64;
         let saved = save_retried_page(app, owner_uin, &page.feeds)?;
@@ -1475,6 +1493,64 @@ async fn sync_visible_moments(
             return Err("本人说说接口未推进分页位置，已停止以避免死循环".into());
         }
         pos = page.next_pos;
+        tokio::time::sleep(std::time::Duration::from_millis(archive_page_delay_ms(
+            interval_ms,
+        )))
+        .await;
+    }
+}
+
+#[derive(Default)]
+struct HistorySyncSummary {
+    pages: u32,
+    records: u64,
+    saved: u64,
+}
+
+async fn sync_history_messages(
+    app: &tauri::AppHandle,
+    login: &QLoginState,
+    archive: &ArchiveState,
+    owner_uin: &str,
+    owner_name: Option<&str>,
+    interval_ms: u64,
+) -> Result<HistorySyncSummary, String> {
+    const PAGE_SIZE: u32 = 30;
+    let mut summary = HistorySyncSummary::default();
+    let mut offset = 0_u32;
+    set_progress(archive, |progress| {
+        progress.message = "正在按 GetQzonehistory 的方式读取历史消息残留…".into();
+    });
+    loop {
+        if archive.cancel.load(Ordering::Relaxed) {
+            return Ok(summary);
+        }
+        if let Some(retry_at) = reserve_archive_page(app, owner_uin)? {
+            return Err(format!("ARCHIVE_RATE_LIMIT:{retry_at}"));
+        }
+        let page = qzone::fetch_history_messages(login, offset, PAGE_SIZE, owner_name).await?;
+        if page.record_count == 0 {
+            return Ok(summary);
+        }
+        let saved = save_retried_page(app, owner_uin, &page.feeds)?;
+        summary.pages = summary.pages.saturating_add(1);
+        summary.records = summary.records.saturating_add(page.record_count as u64);
+        summary.saved = summary.saved.saturating_add(saved);
+        set_progress(archive, |progress| {
+            progress.pages = progress.pages.saturating_add(1);
+            progress.fetched = progress
+                .fetched
+                .saturating_add(page.record_count as u64);
+            progress.saved = progress.saved.saturating_add(saved);
+            progress.message = format!(
+                "已读取 {} 条历史消息残留，正在继续向更早记录翻页…",
+                summary.records
+            );
+        });
+        let advance = u32::try_from(page.record_count).unwrap_or(PAGE_SIZE).max(1);
+        offset = offset
+            .checked_add(advance)
+            .ok_or("历史消息分页偏移量溢出")?;
         tokio::time::sleep(std::time::Duration::from_millis(archive_page_delay_ms(
             interval_ms,
         )))
@@ -1544,7 +1620,9 @@ pub async fn start_feed_archive(
         });
     }
     let mut visible_summary = VisibleSyncSummary::default();
+    let mut history_summary = HistorySyncSummary::default();
     let mut visible_sync_error: Option<String> = None;
+    let mut history_sync_error: Option<String> = None;
     let interaction_result: Result<(), String> = async {
         match sync_visible_moments(&app, &login, &archive, &owner_uin, interval_ms).await {
             Ok(summary) => visible_summary = summary,
@@ -1552,7 +1630,27 @@ pub async fn start_feed_archive(
             Err(error) => {
                 visible_sync_error = Some(concise_archive_error(&error));
                 set_progress(&archive, |progress| {
-                    progress.message = "本人说说接口暂时不可用，正在改用互动通知接口继续归档…".into();
+                    progress.message = "本人说说接口暂时不可用，正在改用历史消息接口继续归档…".into();
+                });
+            }
+        }
+        match sync_history_messages(
+            &app,
+            &login,
+            &archive,
+            &owner_uin,
+            visible_summary.owner_name.as_deref(),
+            interval_ms,
+        )
+        .await
+        {
+            Ok(summary) => history_summary = summary,
+            Err(error) if error.starts_with("ARCHIVE_RATE_LIMIT:") => return Err(error),
+            Err(error) => {
+                history_sync_error = Some(concise_archive_error(&error));
+                set_progress(&archive, |progress| {
+                    progress.message =
+                        "历史消息接口暂时不可用，正在用互动通知接口补充已删除残留…".into();
                 });
             }
         }
@@ -1739,7 +1837,8 @@ pub async fn start_feed_archive(
     .await;
     let result = match interaction_result {
         Err(error)
-            if visible_summary.moments > 0 && interaction_error_can_be_partial(&error) =>
+            if (visible_summary.moments > 0 || history_summary.records > 0)
+                && interaction_error_can_be_partial(&error) =>
         {
             Err(format!("ARCHIVE_INTERACTIONS_UNAVAILABLE:{error}"))
         }
@@ -1753,19 +1852,39 @@ pub async fn start_feed_archive(
         }),
         Ok(()) => set_progress(&archive, |p| {
             p.status = "completed";
-            p.message = if let Some(error) = visible_sync_error.as_deref() {
+            p.message = if let (Some(visible_error), Some(history_error)) = (
+                visible_sync_error.as_deref(),
+                history_sync_error.as_deref(),
+            ) {
                 format!(
-                    "互动通知归档已完成；但本人完整说说接口暂时不可用（{error}），稍后重试可补齐本人历史和评论回复"
+                    "互动通知归档已完成；但可见说说接口（{visible_error}）和历史消息接口（{history_error}）暂时不可用，请稍后重试"
+                )
+            } else if let Some(error) = visible_sync_error.as_deref() {
+                format!(
+                    "已读取 {} 条历史消息残留并完成互动补充；但可见说说接口暂时不可用（{error}），稍后重试可补齐仍存在的正文和评论回复",
+                    history_summary.records
+                )
+            } else if let Some(error) = history_sync_error.as_deref() {
+                format!(
+                    "已同步 {} / {} 条本人可见说说并完成互动补充；但历史消息接口暂时不可用（{error}），稍后重试可补齐更多已删除残留",
+                    visible_summary.moments, visible_summary.total
                 )
             } else if p.skipped > 0 {
                 format!(
-                    "归档完成：已同步 {} 条本人说说，共保存 {} 条接口记录；另有 {} 个异常位置可单独重试",
-                    visible_summary.moments, p.saved, p.skipped
+                    "归档完成：已同步 {} / {} 条本人可见说说、{} 条历史消息残留，共保存 {} 条接口记录；另有 {} 个异常位置可单独重试",
+                    visible_summary.moments,
+                    visible_summary.total,
+                    history_summary.records,
+                    p.saved,
+                    p.skipped
                 )
             } else {
                 format!(
-                    "归档完成：已同步 {} 条本人说说及其评论回复，共保存 {} 条接口记录",
-                    visible_summary.moments, p.saved
+                    "归档完成：已同步 {} / {} 条本人可见说说及评论回复，并合并 {} 条历史消息残留，共保存 {} 条接口记录",
+                    visible_summary.moments,
+                    visible_summary.total,
+                    history_summary.records,
+                    p.saved
                 )
             };
             p.retry_at = None;
@@ -1777,8 +1896,11 @@ pub async fn start_feed_archive(
                 );
                 p.status = "completed";
                 p.message = format!(
-                    "已保存 {} 条本人可见说说及其评论回复；互动通知接口暂时不可用（{}），因此点赞和仅残留于互动记录的已删除说说尚未补齐，请稍后继续归档",
-                    visible_summary.moments, detail
+                    "已保存 {} / {} 条本人可见说说及评论回复，并读取 {} 条历史消息残留；互动通知接口暂时不可用（{}），点赞等互动尚未补齐，请稍后继续归档",
+                    visible_summary.moments,
+                    visible_summary.total,
+                    history_summary.records,
+                    detail
                 );
                 p.retry_at = None;
             });

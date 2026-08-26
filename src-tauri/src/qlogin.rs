@@ -55,6 +55,7 @@ pub(crate) struct QzoneAuth {
     pub uin: String,
     pub g_tk: i64,
     pub cookie_header: String,
+    pub desktop_cookie_header: String,
     pub user_agent: String,
 }
 
@@ -93,6 +94,7 @@ impl QLoginState {
             uin,
             g_tk,
             cookie_header: cookie_header(&session.cookies),
+            desktop_cookie_header: desktop_cookie_header(&session.cookies),
             user_agent: session.user_agent.clone(),
         })
     }
@@ -267,6 +269,42 @@ fn cookie_header(cookies: &HashMap<String, String>) -> String {
         .map(|(key, value)| format!("{key}={value}"))
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+// The legacy desktop Qzone feeds APIs are unusually sensitive to the exact
+// authentication cookie set. Keep this in the same order and shape used by a
+// normal desktop request (and by GetQzonehistory) instead of forwarding the
+// mobile fingerprint cookies collected during QR login.
+fn desktop_cookie_header(cookies: &HashMap<String, String>) -> String {
+    let p_uin = cookies
+        .get("p_uin")
+        .or_else(|| cookies.get("uin"))
+        .map(String::as_str)
+        .unwrap_or_default();
+    [
+        ("uin", p_uin),
+        ("skey", cookies.get("skey").map(String::as_str).unwrap_or_default()),
+        ("p_uin", p_uin),
+        (
+            "pt4_token",
+            cookies
+                .get("pt4_token")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+        (
+            "p_skey",
+            cookies
+                .get("p_skey")
+                .map(String::as_str)
+                .unwrap_or_default(),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, value)| !value.is_empty())
+    .map(|(name, value)| format!("{name}={value}"))
+    .collect::<Vec<_>>()
+    .join(";")
 }
 
 fn merge_response_cookies(response: &Response, cookies: &mut HashMap<String, String>) {

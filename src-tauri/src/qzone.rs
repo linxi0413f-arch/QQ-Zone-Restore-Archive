@@ -13,6 +13,10 @@ use crate::qlogin::QLoginState;
 const FEEDS_URL: &str = "https://mobile.qzone.qq.com/get_feeds";
 const OWN_MOMENTS_URL: &str =
     "https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6";
+const HISTORY_MESSAGES_URL: &str =
+    "https://user.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds2_html_pav_all";
+const DESKTOP_QZONE_USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
 const FEED_RESPONSE_ATTEMPTS: u32 = 3;
 const RECYCLE_WINDOW_LABEL: &str = "qzone-recycle-auth";
 const RECYCLE_ALBUM_LIST_URL: &str =
@@ -913,8 +917,15 @@ pub struct FeedPage {
 pub(crate) struct VisibleMomentPage {
     pub(crate) feeds: Vec<Value>,
     pub(crate) moment_count: usize,
+    pub(crate) total: u64,
     pub(crate) next_pos: u32,
     pub(crate) has_more: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct HistoryMessagePage {
+    pub(crate) feeds: Vec<Value>,
+    pub(crate) record_count: usize,
 }
 
 fn value_text(value: &Value, names: &[&str]) -> Option<String> {
@@ -1100,7 +1111,9 @@ pub(crate) async fn fetch_visible_moments(
     num: u32,
 ) -> Result<VisibleMomentPage, String> {
     let auth = state.qzone_auth().await?;
-    let num = num.clamp(1, 40);
+    // This legacy endpoint only paginates reliably with at most 30 records.
+    // Its offset advances by the requested page size, not by msglist.len().
+    let num = num.clamp(1, 30);
     let query = [
         ("uin", auth.uin.clone()),
         ("ftype", "0".into()),
@@ -1120,10 +1133,17 @@ pub(crate) async fn fetch_visible_moments(
             .client()
             .get(OWN_MOMENTS_URL)
             .header(ACCEPT, "*/*")
-            .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
+            .header(ACCEPT_LANGUAGE, "en-US,en;q=0.9")
             .header(REFERER, format!("https://user.qzone.qq.com/{}/main", auth.uin))
-            .header(USER_AGENT, &auth.user_agent)
-            .header(COOKIE, &auth.cookie_header)
+            .header(USER_AGENT, DESKTOP_QZONE_USER_AGENT)
+            .header(COOKIE, &auth.desktop_cookie_header)
+            .header("Priority", "u=1, i")
+            .header(
+                "Sec-Ch-Ua",
+                "\"Not;A=Brand\";v=\"24\", \"Chromium\";v=\"128\"",
+            )
+            .header("Sec-Ch-Ua-Mobile", "?0")
+            .header("Sec-Ch-Ua-Platform", "\"Linux\"")
             .header("Sec-Fetch-Dest", "empty")
             .header("Sec-Fetch-Mode", "cors")
             .header("Sec-Fetch-Site", "same-origin")
@@ -1162,12 +1182,13 @@ pub(crate) async fn fetch_visible_moments(
                         .enumerate()
                         .flat_map(|(index, moment)| visible_moment_as_feeds(moment, &auth.uin, index))
                         .collect();
-                    let next_pos = pos.saturating_add(moment_count as u32);
+                    let next_pos = pos.saturating_add(num);
                     return Ok(VisibleMomentPage {
                         feeds,
                         moment_count,
+                        total,
                         next_pos,
-                        has_more: moment_count > 0 && u64::from(next_pos) < total,
+                        has_more: u64::from(next_pos) < total,
                     });
                 }
             }
@@ -1178,6 +1199,387 @@ pub(crate) async fn fetch_visible_moments(
         }
     }
     Err(format!("获取本人说说失败：{last_error}"))
+}
+
+fn trailing_qq_number(value: &str) -> Option<String> {
+    let digits = value
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    (!digits.is_empty()).then_some(digits)
+}
+
+fn current_utc_year() -> i32 {
+    let mut days = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        / 86_400;
+    let mut year = 1970_i32;
+    loop {
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let year_days = if leap { 366 } else { 365 };
+        if days < year_days {
+            return year;
+        }
+        days -= year_days;
+        year += 1;
+    }
+}
+
+fn history_date_to_timestamp(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> i64 {
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return 0;
+    }
+    // Howard Hinnant's civil-date conversion. QQ displays these timestamps in
+    // China Standard Time, so convert the wall clock from UTC+8 to Unix time.
+    let adjusted_year = year - i32::from(month <= 2);
+    let era = if adjusted_year >= 0 {
+        adjusted_year
+    } else {
+        adjusted_year - 399
+    } / 400;
+    let year_of_era = adjusted_year - era * 400;
+    let shifted_month = month as i32 + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * shifted_month + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era as i64 * 146_097 + day_of_era as i64 - 719_468;
+    days * 86_400 + i64::from(hour * 3_600 + minute * 60 + second) - 8 * 3_600
+}
+
+fn parse_history_timestamp(value: &str) -> i64 {
+    for name in ["data-time", "data-timestamp", "data-abstime"] {
+        let pattern = format!(r#"{name}=[\"'](\d{{9,13}})[\"']"#);
+        if let Some(raw) = regex::Regex::new(&pattern)
+            .ok()
+            .and_then(|pattern| pattern.captures(value))
+            .and_then(|captures| captures.get(1))
+            .and_then(|number| number.as_str().parse::<i64>().ok())
+        {
+            return if raw > 10_000_000_000 { raw / 1_000 } else { raw };
+        }
+    }
+    let full = regex::Regex::new(
+        r"(?P<year>\d{4})[年/-](?P<month>\d{1,2})[月/-](?P<day>\d{1,2})日?\s+(?P<hour>\d{1,2}):(?P<minute>\d{1,2})(?::(?P<second>\d{1,2}))?",
+    )
+    .expect("fixed history timestamp regex");
+    let short = regex::Regex::new(
+        r"(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s+(?P<hour>\d{1,2}):(?P<minute>\d{1,2})(?::(?P<second>\d{1,2}))?",
+    )
+    .expect("fixed short history timestamp regex");
+    let captures = full.captures(value).or_else(|| short.captures(value));
+    let Some(captures) = captures else { return 0; };
+    let number = |name: &str| {
+        captures
+            .name(name)
+            .and_then(|value| value.as_str().parse::<u32>().ok())
+    };
+    let year = captures
+        .name("year")
+        .and_then(|value| value.as_str().parse::<i32>().ok())
+        .unwrap_or_else(current_utc_year);
+    history_date_to_timestamp(
+        year,
+        number("month").unwrap_or(1),
+        number("day").unwrap_or(1),
+        number("hour").unwrap_or(0),
+        number("minute").unwrap_or(0),
+        number("second").unwrap_or(0),
+    )
+}
+
+fn history_record_hash(parts: &[&str]) -> u64 {
+    parts
+        .iter()
+        .flat_map(|part| part.bytes().chain(std::iter::once(0xff)))
+        .fold(0xcbf29ce484222325, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        })
+}
+
+fn decode_history_html(response: &str) -> Result<String, String> {
+    let capture = regex::Regex::new(r"(?s)html\s*:\s*'(.*)',\s*opuin")
+        .expect("fixed history response regex")
+        .captures(response)
+        .and_then(|captures| captures.get(1))
+        .ok_or("历史消息响应中缺少 html 数据")?;
+    let hex = regex::Regex::new(r"\\x([0-9a-fA-F]{2})").expect("fixed hex escape regex");
+    let decoded = hex.replace_all(capture.as_str(), |captures: &regex::Captures<'_>| {
+        u8::from_str_radix(&captures[1], 16)
+            .map(char::from)
+            .unwrap_or('\u{fffd}')
+            .to_string()
+    });
+    Ok(decoded
+        .replace("\\/", "/")
+        .replace("\\'", "'")
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\"))
+}
+
+fn history_attribute(markup: &str, name: &str) -> Option<String> {
+    let pattern = regex::Regex::new(&format!(
+        r#"(?is)\b{}\s*=\s*[\"']([^\"']*)[\"']"#,
+        regex::escape(name)
+    ))
+    .ok()?;
+    pattern
+        .captures(markup)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_owned())
+}
+
+fn history_plain_text(markup: &str) -> String {
+    let without_tags = regex::Regex::new(r"(?is)<[^>]+>")
+        .expect("fixed HTML tag regex")
+        .replace_all(markup, " ");
+    let decoded = without_tags
+        .replace("&nbsp;", " ")
+        .replace("&#160;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    decoded.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn history_element(markup: &str, tag: &str, class_name: &str) -> Option<(String, String)> {
+    let pattern = regex::Regex::new(&format!(
+        r#"(?is)<{tag}\b(?P<attrs>[^>]*)>(?P<body>.*?)</{tag}>"#
+    ))
+    .ok()?;
+    pattern.captures_iter(markup).find_map(|captures| {
+        let attrs = captures.name("attrs")?.as_str();
+        let classes = history_attribute(attrs, "class")?;
+        classes
+            .split_whitespace()
+            .any(|class| class == class_name)
+            .then(|| {
+                (
+                    attrs.to_owned(),
+                    captures
+                        .name("body")
+                        .map(|body| body.as_str().to_owned())
+                        .unwrap_or_default(),
+                )
+            })
+    })
+}
+
+fn history_html_as_feeds(
+    html: &str,
+    owner_uin: &str,
+    owner_name: Option<&str>,
+    _offset: u32,
+) -> Vec<Value> {
+    let card_pattern = regex::Regex::new(r"(?is)<li\b(?P<attrs>[^>]*)>(?P<body>.*?)</li>")
+        .expect("fixed history card regex");
+    let image_pattern = regex::Regex::new(r"(?is)<img\b(?P<attrs>[^>]*)>")
+        .expect("fixed history image regex");
+    card_pattern
+        .captures_iter(html)
+        .filter_map(|card| {
+            let card_attrs = card.name("attrs")?.as_str();
+            let card_classes = history_attribute(card_attrs, "class")?;
+            if !["f-single", "f-s-s"]
+                .iter()
+                .all(|required| card_classes.split_whitespace().any(|class| class == *required))
+            {
+                return None;
+            }
+            let card_body = card.name("body")?.as_str();
+            let author = history_element(card_body, "a", "q_namecard");
+            let parsed_author_name = author
+                .as_ref()
+                .map(|(_, body)| history_plain_text(body))
+                .filter(|value| !value.is_empty());
+            let parsed_author_uin = author.as_ref().and_then(|(attrs, _)| {
+                ["link", "data-uin", "href"]
+                    .iter()
+                    .find_map(|name| history_attribute(attrs, name).and_then(|value| trailing_qq_number(&value)))
+            });
+            let (_, content_markup) = history_element(card_body, "p", "txt-box-title")?;
+            let content = history_plain_text(&content_markup);
+            if content.is_empty() {
+                return None;
+            }
+            let owner_name_matches = owner_name
+                .filter(|name| !name.trim().is_empty())
+                .is_some_and(|name| content.contains(name));
+            let is_owner = parsed_author_uin.as_deref() == Some(owner_uin) || owner_name_matches;
+            let author_uin = if is_owner {
+                Some(owner_uin.to_owned())
+            } else {
+                parsed_author_uin
+            };
+            let author_name = if is_owner {
+                owner_name.map(str::to_owned).or(parsed_author_name)
+            } else {
+                parsed_author_name
+            };
+            let time_node = history_element(card_body, "div", "info-detail");
+            let time_text = time_node
+                .as_ref()
+                .map(|(_, body)| history_plain_text(body))
+                .unwrap_or_default();
+            let time_markup = time_node
+                .as_ref()
+                .map(|(attrs, _)| attrs.as_str())
+                .unwrap_or_default();
+            let published_at = parse_history_timestamp(&format!("{time_markup} {time_text}"));
+            let pictures = image_pattern
+                .captures_iter(card_body)
+                .filter_map(|image| image.name("attrs"))
+                .filter_map(|attrs| {
+                    history_attribute(attrs.as_str(), "src")
+                        .or_else(|| history_attribute(attrs.as_str(), "data-src"))
+                })
+                .map(|url| {
+                    if url.starts_with("//") {
+                        format!("https:{url}")
+                    } else {
+                        url
+                    }
+                })
+                .filter(|url| url.starts_with("http"))
+                .map(|url| json!({ "photourl": [{ "url": url }] }))
+                .collect::<Vec<_>>();
+            let stable_id = history_attribute(card_attrs, "data-key")
+                .or_else(|| history_attribute(card_attrs, "id"))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{:016x}",
+                        history_record_hash(&[
+                            &content,
+                            &time_text,
+                            author_uin.as_deref().unwrap_or_default(),
+                        ])
+                    )
+                });
+            let cell_id = format!("history-html:{stable_id}");
+            Some(json!({
+                "comm": {
+                    "subid": 0,
+                    "time": published_at,
+                    "feedskey": format!("history-html:{stable_id}"),
+                },
+                "userinfo": { "user": { "uin": author_uin.clone(), "nickname": author_name.clone() } },
+                "summary": { "summary": content.clone() },
+                "original": {
+                    "cell_id": { "cellid": cell_id },
+                    "cell_comm": {
+                        "appid": 311,
+                        "time": published_at,
+                        "feedskey": format!("history-html:{stable_id}"),
+                    },
+                    "cell_userinfo": { "user": { "uin": author_uin, "nickname": author_name } },
+                    "cell_summary": { "summary": content },
+                    "cell_pic": { "picdata": { "pic": pictures } },
+                },
+            }))
+        })
+        .collect()
+}
+
+pub(crate) async fn fetch_history_messages(
+    state: &QLoginState,
+    offset: u32,
+    count: u32,
+    owner_name: Option<&str>,
+) -> Result<HistoryMessagePage, String> {
+    let auth = state.qzone_auth().await?;
+    let count = count.clamp(1, 30);
+    let query = vec![
+        ("uin", auth.uin.clone()),
+        ("begin_time", "0".into()),
+        ("end_time", "0".into()),
+        ("getappnotification", "1".into()),
+        ("getnotifi", "1".into()),
+        ("has_get_key", "0".into()),
+        ("offset", offset.to_string()),
+        ("set", "0".into()),
+        ("count", count.to_string()),
+        ("useutf8", "1".into()),
+        ("outputhtmlfeed", "1".into()),
+        ("scope", "1".into()),
+        ("format", "jsonp".into()),
+        ("g_tk", auth.g_tk.to_string()),
+        ("g_tk", auth.g_tk.to_string()),
+    ];
+    let mut last_error = String::new();
+    for attempt in 1..=FEED_RESPONSE_ATTEMPTS {
+        let response = state
+            .client()
+            .get(HISTORY_MESSAGES_URL)
+            .header(
+                ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            )
+            .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.6")
+            .header(CACHE_CONTROL, "no-cache")
+            .header(PRAGMA, "no-cache")
+            .header(REFERER, format!("https://user.qzone.qq.com/{}/main", auth.uin))
+            .header(USER_AGENT, DESKTOP_QZONE_USER_AGENT)
+            .header(COOKIE, &auth.desktop_cookie_header)
+            .header("Sec-Ch-Ua", "\"Not A(Brand\";v=\"99\", \"Chromium\";v=\"128\"")
+            .header("Sec-Ch-Ua-Mobile", "?0")
+            .header("Sec-Ch-Ua-Platform", "\"Linux\"")
+            .header("Sec-Fetch-Dest", "document")
+            .header("Sec-Fetch-Mode", "navigate")
+            .header("Sec-Fetch-Site", "same-origin")
+            .header("Upgrade-Insecure-Requests", "1")
+            .query(&query)
+            .send()
+            .await;
+        match response {
+            Ok(response) => {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|error| format!("读取历史消息响应失败：{error}"))?;
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                    last_error = format!("HTTP {status}");
+                } else if !status.is_success() {
+                    return Err(format!("获取历史消息失败：HTTP {status}"));
+                } else if !body.contains("html") {
+                    return Err(format!(
+                        "历史消息接口返回异常：{}",
+                        body.chars().take(120).collect::<String>()
+                    ));
+                } else {
+                    let html = decode_history_html(&body)?;
+                    let feeds = history_html_as_feeds(&html, &auth.uin, owner_name, offset);
+                    return Ok(HistoryMessagePage {
+                        record_count: feeds.len(),
+                        feeds,
+                    });
+                }
+            }
+            Err(error) => last_error = error.to_string(),
+        }
+        if attempt < FEED_RESPONSE_ATTEMPTS {
+            tokio::time::sleep(feed_retry_delay(attempt)).await;
+        }
+    }
+    Err(format!("获取历史消息失败：{last_error}"))
 }
 
 fn parse_feed_page(value: Value) -> Result<FeedPage, String> {
@@ -1485,7 +1887,11 @@ pub async fn fetch_more_feeds(
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_qzone_success, feed_error_can_skip, feed_error_is_transient, parse_feed_page, parse_qzone_json, retryable_response_reason, visible_moment_as_feeds, FEEDS_URL};
+    use super::{
+        decode_history_html, ensure_qzone_success, feed_error_can_skip,
+        feed_error_is_transient, history_html_as_feeds, parse_feed_page, parse_qzone_json,
+        retryable_response_reason, visible_moment_as_feeds, FEEDS_URL,
+    };
     use reqwest::StatusCode;
     use serde_json::json;
 
@@ -1618,6 +2024,27 @@ mod tests {
         assert_eq!(replies[1]["user"]["nickname"], "甲");
         assert_eq!(replies[1]["replyuser"]["nickname"], "乙");
         assert_eq!(feeds[2]["comm"]["subid"], 217);
+    }
+
+    #[test]
+    fn parses_getqzonehistory_html_records_as_owner_dynamics() {
+        let response = r#"_Callback({html:'\x3Cli class="f-single f-s-s" data-key="old-1"\x3E\x3Ca class="f-name q_namecard" link="nameCard_10001"\x3E本人\x3C/a\x3E\x3Cdiv class="info-detail" data-time="1627745220"\x3E2021年7月31日 23:27\x3C/div\x3E\x3Cp class="txt-box-title ellipsis-one"\x3E本人：一条历史说说\x3C/p\x3E\x3Ca class="img-item"\x3E\x3Cimg src="//example.com/old.jpg"\x3E\x3C/a\x3E\x3C/li\x3E',opuin:'10001'});"#;
+        let html = decode_history_html(response).expect("应解码旧历史消息 HTML");
+        let feeds = history_html_as_feeds(&html, "10001", Some("本人"), 0);
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(
+            feeds[0]["original"]["cell_userinfo"]["user"]["uin"],
+            "10001"
+        );
+        assert_eq!(
+            feeds[0]["original"]["cell_summary"]["summary"],
+            "本人：一条历史说说"
+        );
+        assert_eq!(
+            feeds[0]["original"]["cell_pic"]["picdata"]["pic"][0]["photourl"][0]["url"],
+            "https://example.com/old.jpg"
+        );
+        assert_eq!(feeds[0]["original"]["cell_comm"]["time"], 1_627_745_220);
     }
 
     #[test]
