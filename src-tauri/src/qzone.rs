@@ -1365,7 +1365,7 @@ fn history_element(markup: &str, tag: &str, class_name: &str) -> Option<(String,
         r#"(?is)<{tag}\b(?P<attrs>[^>]*)>(?P<body>.*?)</{tag}>"#
     ))
     .ok()?;
-    pattern.captures_iter(markup).find_map(|captures| {
+    let found = pattern.captures_iter(markup).find_map(|captures| {
         let attrs = captures.name("attrs")?.as_str();
         let classes = history_attribute(attrs, "class")?;
         classes
@@ -1380,7 +1380,8 @@ fn history_element(markup: &str, tag: &str, class_name: &str) -> Option<(String,
                         .unwrap_or_default(),
                 )
             })
-    })
+    });
+    found
 }
 
 fn history_html_as_feeds(
