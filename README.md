@@ -36,6 +36,14 @@ AI collaborators: please read AGENTS.md for project-specific instructions, archi
 - **暗色模式**：跟随系统或手动切换
 - **跨平台**：Windows / macOS / Linux 桌面端 + Android 移动端
 
+## v1.0.6 优化
+
+- 按 `GetQzonehistory` 的完整双通道方案接入旧版 `feeds2_html_pav_all` 历史消息列表，与仍存在的本人说说去重合并
+- 修正 `emotion_cgi_msglist_v6` 的分页规则：固定每页 30 条并按请求页长推进，不再因首批只返回少量记录而错位结束
+- 可见说说接口改用与参考项目一致的桌面 Chromium 请求头及精简 Cookie 顺序，避免移动端登录指纹影响旧接口结果
+- 归档进度同时报告“接口总数 / 实际同步数 / 历史残留数”；接口提前返回空页时明确报错，不再误报完整成功
+- 新增 Rust 自动测试任务，持续验证历史 HTML 解析以及评论、递归回复链转换
+
 ## v1.0.5 优化
 
 - 新增本人历史说说补齐通道，参考 `GetQzonehistory` 使用 `emotion_cgi_msglist_v6` 分页读取可见说说
@@ -51,7 +59,7 @@ AI collaborators: please read AGENTS.md for project-specific instructions, archi
 - 只有明确的单页接口错误才会尝试自动定位，最大探测范围由 4096 收紧到 256；无效 JSON 或缺少数据也会安全暂停，降低无声漏档风险
 - 降低任务页轮询频率，并升级存在已知安全问题的间接前端依赖
 
-参考项目 `GetQzonehistory` 已归档，且其旧接口返回的是信息较少的 HTML，因此本版本只借鉴其“保守分页、避免漏档”的思路，没有把旧接口直接当作完整恢复来源。
+参考项目 `GetQzonehistory` 的旧接口返回的是信息较少的 HTML。本项目从 v1.0.6 起直接将其作为“历史消息残留”来源之一，但仍会与结构化的可见说说、评论回复和互动通知合并；该历史列表本身不等于 QQ 服务端的完整删除备份。
 
 ## 截图
 

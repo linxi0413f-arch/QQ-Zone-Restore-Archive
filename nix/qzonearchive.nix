@@ -8,7 +8,7 @@ let
 in
 rustPlatform.buildRustPackage {
   pname = "qzonearchive";
-  version = "1.0.5";
+  version = "1.0.6";
 
   src = lib.cleanSource ../.;
 
@@ -18,7 +18,7 @@ rustPlatform.buildRustPackage {
   cargoHash = "sha256-Q4WQpfFo4fqtRbgTcyP/80ogt/G/NpbdhLuRX16OMwk=";
 
   npmDeps = pkgs.fetchNpmDeps {
-    name = "qzonearchive-1.0.5-npm-deps";
+    name = "qzonearchive-1.0.6-npm-deps";
     src = lib.cleanSource ../.;
     hash = "sha256-24RbBcv3OY1LvWCaXDbvT5Bou3uw9imus5iroD1WUF4=";
   };
