@@ -67,8 +67,8 @@ rustPlatform.buildRustPackage {
     cat > "$out/share/applications/qzonearchive.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=空间归档
-Comment=本地 QQ 空间归档工具
+Name=QQ Zone Restore Archive
+Comment=本地 QQ 空间恢复归档工具
 Exec=$out/bin/qzonearchive
 Icon=qzonearchive
 Categories=Utility;

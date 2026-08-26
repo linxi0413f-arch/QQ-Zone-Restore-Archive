@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QzoneArchive",
-  "version": "1.0.3",
+  "productName": "QQ Zone Restore Archive",
+  "version": "1.0.4",
   "identifier": "top.ehre.qzonearchive",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "空间归档",
+        "title": "QQ 空间恢复归档",
         "width": 1180,
         "height": 760,
         "minWidth": 760,
@@ -35,11 +35,11 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "dmg", "app"],
-    "publisher": "Ehre",
+    "publisher": "xiaosu19",
     "category": "Utility",
-    "shortDescription": "将 QQ 空间动态、照片、视频与互动记录安全归档到本地。",
-    "longDescription": "空间归档是一款本地 QQ 空间归档工具，可以还原并保存原始动态、照片、视频、点赞和评论，支持多账号隔离、分页浏览与断点续传。",
-    "copyright": "Copyright © 2026 Ehre",
+    "shortDescription": "尝试从互动记录还原 QQ 空间动态，并将照片、视频与评论安全归档到本地。",
+    "longDescription": "QQ Zone Restore Archive 是基于 QzoneArchive 二次开发的本地归档工具，可尝试从仍存在的互动记录中还原动态、照片、视频、点赞和评论；不保证能够恢复没有互动痕迹或已被服务端彻底清除的内容。",
+    "copyright": "Copyright © 2026 xiaosu19 and QzoneArchive contributors",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -77,7 +77,7 @@
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false,
         "compression": "lzma",
-        "startMenuFolder": "空间归档"
+        "startMenuFolder": "QQ Zone Restore Archive"
       },
       "wix": {
         "upgradeCode": "24779296-0f03-5f99-83ea-fc2fcda733b9",

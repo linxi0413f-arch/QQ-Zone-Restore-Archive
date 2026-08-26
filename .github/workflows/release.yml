@@ -725,7 +725,7 @@ jobs:
           DISPLAY_NAME="$(/usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$INFO_PLIST")"
 
           test "$EXECUTABLE" = "qzonearchive"
-          test "$DISPLAY_NAME" = "空间归档"
+          test "$DISPLAY_NAME" = "QQ 空间恢复归档"
           test -f "$APP_PATH/$EXECUTABLE"
           test -f "$APP_PATH/PrivacyInfo.xcprivacy"
           test -f "$APP_PATH/AppIcon60x60@2x.png"

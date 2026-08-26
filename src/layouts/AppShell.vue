@@ -75,7 +75,7 @@ async function logout() {
     <aside class="desktop-sidebar">
       <div class="brand">
         <div class="brand-mark"><i class="pi pi-box" /></div>
-        <div class="brand-copy"><strong>空间归档</strong><span>Qzone Archive</span></div>
+        <div class="brand-copy"><strong>恢复归档</strong><span>QQ Zone Restore Archive</span></div>
       </div>
       <nav class="side-navigation" aria-label="主要导航">
         <RouterLink v-for="item in navigation" :key="item.to" :to="item.to">
@@ -88,7 +88,7 @@ async function logout() {
     </aside>
     <div class="app-workspace">
       <header class="topbar">
-        <div><p class="topbar-eyebrow">QZONE ARCHIVE</p><h1>{{ pageTitle }}</h1></div>
+        <div><p class="topbar-eyebrow">QQ ZONE RESTORE ARCHIVE</p><h1>{{ pageTitle }}</h1></div>
         <div class="topbar-actions">
           <Button :icon="themeIcon" severity="secondary" text rounded aria-label="切换主题" @click="appStore.toggleTheme" />
           <button class="account-chip" type="button" :aria-label="loggedIn ? '打开账号菜单' : '登录 QQ 空间'" @click="handleAccountClick">

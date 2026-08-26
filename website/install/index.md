@@ -4,7 +4,7 @@ title: 安装
 
 # 安装
 
-从 [GitHub Releases](https://github.com/Gaoshu705/QzoneArchive/releases) 下载与设备对应的最新版本。
+从 [GitHub Releases](https://github.com/xiaosu19/QQ-Zone-Restore-Archive/releases) 下载与设备对应的最新版本。
 
 ## Windows
 
@@ -114,6 +114,6 @@ nix build
 nix profile install .#qzonearchive
 ```
 
-Linux 用户安装 QQ 客户端时，请按你自己发行版的要求选择 QQ 官方提供的 deb、rpm 或 Flatpak 版本；空间归档本身不绑定或内置 QQ 客户端，只需要登录后扫描 QQ 空间的二维码即可使用。
+Linux 用户安装 QQ 客户端时，请按你自己发行版的要求选择 QQ 官方提供的 deb、rpm 或 Flatpak 版本；QQ Zone Restore Archive 本身不绑定或内置 QQ 客户端，只需要登录后扫描 QQ 空间的二维码即可使用。
 
 从源码构建 Linux 版本可参考[开发](../development/)。

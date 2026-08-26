@@ -1,11 +1,13 @@
 ---
 title: 概览
-description: 了解 QQ空间归档的边界、功能和适用场景。
+description: 了解 QQ Zone Restore Archive 的边界、功能和适用场景。
 ---
 
-# QQ空间归档
+# QQ Zone Restore Archive
 
-QQ空间归档是用于**个人 QQ 空间资料备份**的本地应用。它将可访问的动态、媒体和互动记录写入设备上的 SQLite 数据库，并支持导出独立 HTML。
+QQ Zone Restore Archive 是用于**个人 QQ 空间资料恢复与备份**的本地应用。它将可访问的动态、媒体和互动记录写入设备上的 SQLite 数据库，并支持导出独立 HTML。
+
+本项目由 [https://github.com/xiaosu19](https://github.com/xiaosu19) 维护，基于 [Gaoshu705/QzoneArchive](https://github.com/Gaoshu705/QzoneArchive) 二次开发，并参考 [LibraHp/GetQzonehistory](https://github.com/LibraHp/GetQzonehistory) 的取数思路。本项目不是腾讯官方产品，也不保证能够恢复没有互动痕迹或已被服务端彻底清除的内容。
 
 ## 适合什么场景
 

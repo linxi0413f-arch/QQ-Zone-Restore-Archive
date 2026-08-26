@@ -152,9 +152,9 @@ onBeforeUnmount(() => {
 
     <p v-if="error" class="archive-error"><i class="pi pi-exclamation-circle" />{{ error }}</p>
     <section v-if="media.length" class="media-waterfall" aria-label="归档媒体">
-      <button v-for="item in media" :key="item.key" type="button" class="media-tile" @click="openOriginal(item)">
+      <button v-for="item in media" :key="item.key" type="button" class="media-tile" :aria-label="`查看 ${item.authorName || 'QQ 用户'} 于 ${formatTime(item.publishedAt)} 发布的${item.mediaType === 'video' ? '视频' : '照片'}`" @click="openOriginal(item)">
         <div class="media-tile-visual" :data-media-image="item.mediaType === 'photo' ? item.url : item.coverUrl" :data-dynamic-id="item.mediaType === 'photo' ? item.dynamicId : undefined" :data-picture-index="item.mediaType === 'photo' ? item.pictureIndex : undefined">
-          <img v-if="imageSources[item.mediaType === 'photo' ? item.url : (item.coverUrl || '')]" :src="imageSources[item.mediaType === 'photo' ? item.url : (item.coverUrl || '')]" loading="lazy" @error="handleImageError(item.mediaType === 'photo' ? item.url : (item.coverUrl || ''))" />
+          <img v-if="imageSources[item.mediaType === 'photo' ? item.url : (item.coverUrl || '')]" :src="imageSources[item.mediaType === 'photo' ? item.url : (item.coverUrl || '')]" :alt="`${item.authorName || 'QQ 用户'}的归档${item.mediaType === 'video' ? '视频封面' : '照片'}`" width="640" height="480" loading="lazy" decoding="async" @error="handleImageError(item.mediaType === 'photo' ? item.url : (item.coverUrl || ''))" />
           <span v-else class="media-placeholder"><i :class="item.mediaType === 'video' ? 'pi pi-video' : 'pi pi-image'" /><span v-if="item.mediaType === 'photo' && imageErrors[item.url]" class="media-image-retry" :title="imageErrors[item.url]" role="button" tabindex="0" @click.stop="loadImage(item.url, item.dynamicId, item.pictureIndex)" @keydown.enter.stop="loadImage(item.url, item.dynamicId, item.pictureIndex)">加载失败，重试</span><template v-else>{{ imageLoading[item.mediaType === 'photo' ? item.url : (item.coverUrl || '')] ? '正在尝试多个图片地址' : item.mediaType === 'video' ? '视频' : '照片' }}</template></span>
           <span v-if="item.mediaType === 'video'" class="media-video-mark"><i class="pi pi-play" /></span>
           <time>{{ new Date(item.publishedAt * 1000).getFullYear() }}</time>

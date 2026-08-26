@@ -955,9 +955,22 @@ pub(crate) async fn fetch_feeds_once(
 }
 
 pub(crate) fn feed_error_can_skip(error: &str) -> bool {
-    error.contains("HTTP 5")
-        || error.starts_with("解析空间动态失败：")
-        || error.starts_with("QQ 空间动态接口返回错误")
+    !feed_error_is_transient(error)
+        && error.starts_with("QQ 空间动态接口返回错误")
+}
+
+pub(crate) fn feed_error_is_transient(error: &str) -> bool {
+    error.starts_with("解析空间动态失败：")
+        || error.starts_with("动态响应中缺少 data")
+        || error.contains("HTTP 5")
+        || error.contains("HTTP 429")
+        || error.contains("请求超时")
+        || error.contains("连接失败")
+        || error.contains("传输失败")
+        || error.contains("响应体读取失败")
+        || ["系统繁忙", "稍后再试", "频繁", "限流"]
+            .iter()
+            .any(|keyword| error.contains(keyword))
 }
 
 async fn fetch_feeds_with_attempts(
@@ -1199,7 +1212,7 @@ pub async fn fetch_more_feeds(
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_qzone_success, feed_error_can_skip, parse_feed_page, parse_qzone_json, retryable_response_reason, FEEDS_URL};
+    use super::{ensure_qzone_success, feed_error_can_skip, feed_error_is_transient, parse_feed_page, parse_qzone_json, retryable_response_reason, FEEDS_URL};
     use reqwest::StatusCode;
     use serde_json::json;
 
@@ -1284,13 +1297,23 @@ mod tests {
     }
 
     #[test]
-    fn only_skips_page_specific_server_or_response_errors() {
-        assert!(feed_error_can_skip(
+    fn only_skips_page_specific_response_errors() {
+        assert!(!feed_error_can_skip(
             "获取空间动态失败：HTTP 500 Internal Server Error"
         ));
-        assert!(feed_error_can_skip("解析空间动态失败：expected value"));
+        assert!(feed_error_is_transient(
+            "获取空间动态失败：HTTP 500 Internal Server Error"
+        ));
+        assert!(!feed_error_can_skip("解析空间动态失败：expected value"));
+        assert!(feed_error_is_transient("解析空间动态失败：expected value"));
         assert!(!feed_error_can_skip(
             "获取空间动态失败：HTTP 429 Too Many Requests"
+        ));
+        assert!(feed_error_is_transient(
+            "QQ 空间动态接口返回错误 -1：系统繁忙，请稍后再试"
+        ));
+        assert!(feed_error_can_skip(
+            "QQ 空间动态接口返回错误 10001：当前游标已失效"
         ));
         assert!(!feed_error_can_skip("尚未登录 QQ 空间"));
     }

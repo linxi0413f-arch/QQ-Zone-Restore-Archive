@@ -598,7 +598,10 @@ struct ArchiveCheckpoint {
 const ARCHIVE_RATE_WINDOW_SECONDS: i64 = 10 * 60;
 const ARCHIVE_RATE_PAGE_LIMIT: i64 = 300;
 const ARCHIVE_CURSOR_MAX_AGE_SECONDS: i64 = 10 * 60;
-const ARCHIVE_SKIP_MAX_OFFSET_ADVANCE: i64 = 4_096;
+// A very large automatic jump can silently discard thousands of interaction
+// records. Keep page-specific recovery bounded; transient server failures are
+// paused instead of being treated as corrupt cursor positions.
+const ARCHIVE_SKIP_MAX_OFFSET_ADVANCE: i64 = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FeedCursorDetails {
@@ -1309,6 +1312,13 @@ fn concise_archive_error(error: &str) -> String {
     }
 }
 
+fn transient_archive_error(error: &str) -> String {
+    format!(
+        "QQ 空间接口暂时不可用（{}）。归档进度已保存，未自动跳过任何记录；请稍后点击“继续归档”重试。",
+        concise_archive_error(error)
+    )
+}
+
 async fn fetch_after_skipped_cursor(
     app: &tauri::AppHandle,
     login: &QLoginState,
@@ -1344,6 +1354,9 @@ async fn fetch_after_skipped_cursor(
                 )))
                 .await;
             }
+            Err(error) if qzone::feed_error_is_transient(&error) => {
+                return Err(transient_archive_error(&error));
+            }
             Err(error) => return Err(error),
         }
     }
@@ -1374,6 +1387,9 @@ async fn fetch_after_skipped_cursor(
             }
             Err(error) if qzone::feed_error_can_skip(&error) => {
                 low = offset_advance.saturating_add(1);
+            }
+            Err(error) if qzone::feed_error_is_transient(&error) => {
+                return Err(transient_archive_error(&error));
             }
             Err(error) => return Err(error),
         }
@@ -1471,6 +1487,17 @@ pub async fn start_feed_archive(
                     Err(_) => None,
                 };
                 if let Some((details, (known_advance, known_error))) = known_skip {
+                    if qzone::feed_error_is_transient(&known_error) {
+                        return Err(format!(
+                            "上次异常位置仍标记为临时接口故障。请先在下方对第 {} 页执行“单独重试”；成功后即可从断点继续。",
+                            archive
+                                .progress
+                                .lock()
+                                .map_err(|_| "归档状态锁已损坏")?
+                                .pages
+                                .saturating_add(1)
+                        ));
+                    }
                     let (page, resume_cursor, offset_advance) = fetch_after_skipped_cursor(
                         &app,
                         &login,
@@ -1541,11 +1568,20 @@ pub async fn start_feed_archive(
                             ));
                             page
                         }
+                        Err(error) if qzone::feed_error_is_transient(&error) => {
+                            return Err(transient_archive_error(&error));
+                        }
                         Err(error) => return Err(error),
                     }
                 }
             } else {
-                qzone::fetch_feeds(&login, "1", None).await?
+                match qzone::fetch_feeds(&login, "1", None).await {
+                    Ok(page) => page,
+                    Err(error) if qzone::feed_error_is_transient(&error) => {
+                        return Err(transient_archive_error(&error));
+                    }
+                    Err(error) => return Err(error),
+                }
             };
             let fetched = page.feeds.len() as u64;
             let next = if page.has_more {
@@ -2446,7 +2482,7 @@ pub async fn export_archived_html(
         cards.push_str("</article>");
     }
     Ok(format!(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ空间归档 - {category_name}</title><style>*{{box-sizing:border-box}}body{{margin:0;background:#f3f6fb;color:#243247;font:14px/1.7 system-ui,-apple-system,"Microsoft YaHei",sans-serif}}main{{width:min(820px,calc(100% - 24px));margin:30px auto}}h1{{margin:0}}.intro{{color:#758298;margin:0 0 20px}}.card{{background:#fff;border:1px solid #e5eaf2;border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 8px 25px #2038580b}}header{{display:flex;gap:11px;align-items:center}}.avatar{{width:44px;height:44px;border-radius:50%}}header strong,header small{{display:block}}small,.muted,.stats{{color:#7e899a}}.content{{margin:14px 0;white-space:pre-wrap;overflow-wrap:anywhere}}.mention,a{{color:#2684ff}}.pictures{{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}}.pictures img{{display:block;width:100%;height:210px;object-fit:cover;border-radius:8px}}.video{{display:inline-block;padding:7px 12px;background:#edf5ff;border-radius:9px;text-decoration:none}}.stats{{margin-top:12px}}.comments{{margin-top:12px;padding:12px;background:#f6f8fb;border-radius:10px}}.comment{{margin:8px 0}}.comment-meta{{margin-bottom:3px;color:#7e899a;font-size:11px}}.comment-meta b{{color:#2684ff}}.replies{{margin:6px 0 0 18px;padding:7px 10px;border-left:2px solid #c9dcf6;background:#fff;border-radius:0 7px 7px 0}}@media(max-width:600px){{main{{margin:16px auto}}.card{{padding:15px}}.pictures img{{height:125px}}}}</style></head><body><main><h1>QQ空间归档 · {category_name}</h1><p class="intro">账号 {owner} · 共 {count} 条 · 导出时间 <span id="export-time"></span></p>{cards}</main><script>document.querySelector('#export-time').textContent=new Date().toLocaleString();document.querySelectorAll('time[data-time]').forEach(e=>e.textContent=new Date(Number(e.dataset.time)*1000).toLocaleString());</script></body></html>"#,
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QQ 空间恢复归档 - {category_name}</title><style>*{{box-sizing:border-box}}body{{margin:0;background:#f3f6fb;color:#243247;font:14px/1.7 system-ui,-apple-system,"Microsoft YaHei",sans-serif}}main{{width:min(820px,calc(100% - 24px));margin:30px auto}}h1{{margin:0}}.intro{{color:#758298;margin:0 0 20px}}.card{{background:#fff;border:1px solid #e5eaf2;border-radius:16px;padding:20px;margin:14px 0;box-shadow:0 8px 25px #2038580b}}header{{display:flex;gap:11px;align-items:center}}.avatar{{width:44px;height:44px;border-radius:50%}}header strong,header small{{display:block}}small,.muted,.stats{{color:#7e899a}}.content{{margin:14px 0;white-space:pre-wrap;overflow-wrap:anywhere}}.mention,a{{color:#2684ff}}.pictures{{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}}.pictures img{{display:block;width:100%;height:210px;object-fit:cover;border-radius:8px}}.video{{display:inline-block;padding:7px 12px;background:#edf5ff;border-radius:9px;text-decoration:none}}.stats{{margin-top:12px}}.comments{{margin-top:12px;padding:12px;background:#f6f8fb;border-radius:10px}}.comment{{margin:8px 0}}.comment-meta{{margin-bottom:3px;color:#7e899a;font-size:11px}}.comment-meta b{{color:#2684ff}}.replies{{margin:6px 0 0 18px;padding:7px 10px;border-left:2px solid #c9dcf6;background:#fff;border-radius:0 7px 7px 0}}@media(max-width:600px){{main{{margin:16px auto}}.card{{padding:15px}}.pictures img{{height:125px}}}}</style></head><body><main><h1>QQ 空间恢复归档 · {category_name}</h1><p class="intro">账号 {owner} · 共 {count} 条 · 导出时间 <span id="export-time"></span></p>{cards}</main><script>document.querySelector('#export-time').textContent=new Date().toLocaleString();document.querySelectorAll('time[data-time]').forEach(e=>e.textContent=new Date(Number(e.dataset.time)*1000).toLocaleString());</script></body></html>"#,
         owner = html_escape(&owner_uin),
         count = items.len()
     ))
@@ -3052,14 +3088,14 @@ mod tests {
     }
 
     #[test]
-    fn probes_large_skip_ranges_exponentially() {
+    fn bounds_page_specific_skip_probes() {
         assert_eq!(
             skip_probe_offsets(1),
-            vec![1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+            vec![1, 2, 4, 8, 16, 32, 64, 128, 256]
         );
         assert_eq!(
             skip_probe_offsets(20),
-            vec![20, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+            vec![20, 32, 64, 128, 256]
         );
     }
 }

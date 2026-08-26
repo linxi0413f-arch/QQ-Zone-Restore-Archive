@@ -30,4 +30,4 @@ npm run dev
 
 ## 提交与 Pull Request
 
-遵循仓库的 [贡献指南](https://github.com/Gaoshu705/QzoneArchive/blob/main/CONTRIBUTING.md)。每个 PR 聚焦一个主题，使用 Conventional Commits 标题，并说明验证方式和风险。
+遵循仓库的 [贡献指南](https://github.com/xiaosu19/QQ-Zone-Restore-Archive/blob/main/CONTRIBUTING.md)。每个 PR 聚焦一个主题，使用 Conventional Commits 标题，并说明验证方式和风险。

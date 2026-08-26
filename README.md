@@ -3,7 +3,7 @@
 AI collaborators: please read AGENTS.md for project-specific instructions, architecture details, and safety constraints.
 </details>
 
-# 空间归档 (QzoneArchive)
+# QQ Zone Restore Archive
 
 [![Rust](https://img.shields.io/badge/Rust-1.77%2B-orange)](https://www.rust-lang.org/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-blue)](https://v2.tauri.app/)
@@ -11,15 +11,18 @@ AI collaborators: please read AGENTS.md for project-specific instructions, archi
 [![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 将 QQ 空间动态、照片、视频与互动记录安全归档到本地的桌面 / 移动端工具。
-[详细食用教程](https://www.bilibili.com/video/BV1SiuZ6KEwy) 
- 
-<a href="https://www.star-history.com/?repos=Gaoshu705%2FQzoneArchive&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=Gaoshu705/QzoneArchive&type=date&theme=dark&legend=top-left&sealed_token=VVJL1S9RMakv50gmYM8C74miiTpiN4O14StqOWLkzBbJNM_ksdUxftRGOvO_1_fnDnEscvd9qj6qqnS-9dOYZkIrJhVYFxgmxN_0xduxtjm1eICUxBdfIQ" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=Gaoshu705/QzoneArchive&type=date&legend=top-left&sealed_token=VVJL1S9RMakv50gmYM8C74miiTpiN4O14StqOWLkzBbJNM_ksdUxftRGOvO_1_fnDnEscvd9qj6qqnS-9dOYZkIrJhVYFxgmxN_0xduxtjm1eICUxBdfIQ" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Gaoshu705/QzoneArchive&type=date&legend=top-left&sealed_token=VVJL1S9RMakv50gmYM8C74miiTpiN4O14StqOWLkzBbJNM_ksdUxftRGOvO_1_fnDnEscvd9qj6qqnS-9dOYZkIrJhVYFxgmxN_0xduxtjm1eICUxBdfIQ" />
- </picture>
-</a>
+
+作者：[https://github.com/xiaosu19](https://github.com/xiaosu19)
+
+项目地址：[xiaosu19/QQ-Zone-Restore-Archive](https://github.com/xiaosu19/QQ-Zone-Restore-Archive)
+
+> [!IMPORTANT]
+> 本项目是基于 [Gaoshu705/QzoneArchive](https://github.com/Gaoshu705/QzoneArchive) 的 GPLv3 二次开发版本，并参考了 [LibraHp/GetQzonehistory](https://github.com/LibraHp/GetQzonehistory) 的互动列表与可见说说补齐思路。原项目作者、参考项目作者和腾讯公司均不对本分支提供背书或担保。
+
+> [!WARNING]
+> 本项目不是腾讯、QQ 或 QQ 空间官方产品。所谓“恢复已删除说说”仅指：当已删除内容仍残留在点赞、评论、回复等互动记录中时，尝试还原其中可取得的正文和媒体信息；没有互动痕迹、已被服务端彻底清除、无权访问或接口不再返回的内容无法恢复，也不保证归档结果完整。请仅处理本人账号或已获得充分授权的内容，并自行承担账号限制、第三方接口变化、数据遗漏和本地数据保管风险。
+
+如果本项目对你有帮助，也请支持并 Star [上游项目 Gaoshu705/QzoneArchive](https://github.com/Gaoshu705/QzoneArchive)。
 
 ## 功能
 
@@ -32,6 +35,16 @@ AI collaborators: please read AGENTS.md for project-specific instructions, archi
 - **媒体时光轴**：按年份浏览归档的照片和视频，视频支持按需缓存
 - **暗色模式**：跟随系统或手动切换
 - **跨平台**：Windows / macOS / Linux 桌面端 + Android 移动端
+
+## v1.0.4 优化
+
+- 媒体时光轴改为稳定的响应式网格，图片异步加载时不再产生大面积空洞
+- 卡片悬停和键盘聚焦时保持明确的文字对比度，并支持“减少动态效果”系统设置
+- 连续 HTTP 500、429、超时或系统繁忙会保留断点并安全暂停，不再误判为坏页后大跨度跳过记录
+- 只有明确的单页接口错误才会尝试自动定位，最大探测范围由 4096 收紧到 256；无效 JSON 或缺少数据也会安全暂停，降低无声漏档风险
+- 降低任务页轮询频率，并升级存在已知安全问题的间接前端依赖
+
+参考项目 `GetQzonehistory` 已归档，且其旧接口返回的是信息较少的 HTML，因此本版本只借鉴其“保守分页、避免漏档”的思路，没有把旧接口直接当作完整恢复来源。
 
 ## 截图
 
@@ -140,14 +153,6 @@ npm run tauri android build
 ## 免责声明
 
 本软件是用于整理和备份个人 QQ 空间资料的本地工具，与腾讯公司、QQ、QQ 空间及其关联主体不存在隶属、授权、合作关系。使用者应在合法授权范围内使用，并自行承担使用风险。详见应用内《免责声明与使用须知》。
-
-## 赞赏
-
-如果这个项目对你有帮助，欢迎请开发者喝杯咖啡 ☕
-
-| 微信 | 支付宝 |
-|------|--------|
-| ![微信赞赏](public/sponsor/wx.jpg) | ![支付宝赞赏](public/sponsor/zfb.jpg) |
 
 ## 友情链接
 

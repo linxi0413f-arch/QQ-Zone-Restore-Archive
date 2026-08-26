@@ -1,8 +1,8 @@
 [package]
 name = "qzonearchive"
-version = "1.0.3"
+version = "1.0.4"
 description = "将 QQ 空间动态、照片、视频与互动记录安全归档到本地"
-authors = ["Ehre"]
+authors = ["https://github.com/xiaosu19"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

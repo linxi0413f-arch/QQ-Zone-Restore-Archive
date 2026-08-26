@@ -18,7 +18,6 @@ const deleteVisible = ref(false);
 const deleting = ref(false);
 const error = ref("");
 const appVersion = ref("");
-const sponsorImages = { wx: "/sponsor/wx.jpg", zfb: "/sponsor/zfb.jpg" };
 
 onMounted(async () => {
   try {
@@ -27,10 +26,6 @@ onMounted(async () => {
     console.warn("读取应用版本失败", reason);
   }
 });
-
-function hideMissingSponsorCode(event: Event) {
-  (event.currentTarget as HTMLImageElement).hidden = true;
-}
 
 watch(intervalMs, (value) => { intervalMs.value = setArchiveInterval(value); });
 
@@ -72,22 +67,15 @@ async function deleteEverything() {
     <p v-if="error" class="archive-error"><i class="pi pi-exclamation-circle" />{{ error }}</p>
     <article class="surface-card settings-card about-card">
       <div class="about-main">
-        <div class="settings-copy"><span class="settings-icon"><i class="pi pi-info-circle" /></span><div><h3>关于</h3><p>Qzone Archive · 跨平台空间归档工具</p><p class="author-line">作者：<button class="author-link" type="button" @click="openUrl('https://space.bilibili.com/1117414477')">LibraHp_0928 <i class="pi pi-external-link" /></button></p></div></div>
+        <div class="settings-copy"><span class="settings-icon"><i class="pi pi-info-circle" /></span><div><h3>关于</h3><p>QQ Zone Restore Archive · 跨平台空间恢复归档工具</p><p class="author-line">作者：<button class="author-link" type="button" @click="openUrl('https://github.com/xiaosu19')">https://github.com/xiaosu19 <i class="pi pi-external-link" /></button></p><p class="author-line">项目：<button class="author-link" type="button" @click="openUrl('https://github.com/xiaosu19/QQ-Zone-Restore-Archive')">QQ-Zone-Restore-Archive <i class="pi pi-external-link" /></button></p><p class="author-line">基于：<button class="author-link" type="button" @click="openUrl('https://github.com/Gaoshu705/QzoneArchive')">Gaoshu705/QzoneArchive <i class="pi pi-external-link" /></button> · 参考：<button class="author-link" type="button" @click="openUrl('https://github.com/LibraHp/GetQzonehistory')">LibraHp/GetQzonehistory <i class="pi pi-external-link" /></button></p></div></div>
         <span class="version-badge">{{ appVersion ? `v${appVersion}` : "版本未知" }}</span>
-      </div>
-      <div class="sponsor-section">
-        <div class="sponsor-heading"><div><h4>赞助支持</h4><p>如果这个项目帮助到了你，可以请作者喝杯咖啡。</p></div><i class="pi pi-heart-fill" /></div>
-        <div class="sponsor-codes">
-          <figure class="sponsor-code"><div class="sponsor-qr"><span><i class="pi pi-image" />请放置微信收款码</span><img :src="sponsorImages.wx" alt="微信收款码" @error="hideMissingSponsorCode" /></div><figcaption><i class="pi pi-wallet" />微信</figcaption></figure>
-          <figure class="sponsor-code"><div class="sponsor-qr"><span><i class="pi pi-image" />请放置支付宝收款码</span><img :src="sponsorImages.zfb" alt="支付宝收款码" @error="hideMissingSponsorCode" /></div><figcaption><i class="pi pi-wallet" />支付宝</figcaption></figure>
-        </div>
       </div>
     </article>
   </section>
 
   <Dialog v-model:visible="privacyVisible" modal :draggable="false" class="privacy-dialog" header="隐私协议">
     <div class="privacy-content">
-      <p>空间归档是一款本地归档工具。我们重视你的账号与空间内容安全。</p>
+      <p>QQ Zone Restore Archive 是一款本地恢复归档工具。我们重视你的账号与空间内容安全。</p>
       <h4>1. 数据存储</h4><p>QQ 空间动态、留言、点赞、评论、登录会话和媒体缓存保存在你的设备本地，不会上传至本项目的开发者服务器。</p>
       <h4>2. 网络请求</h4><p>应用仅在登录、读取空间资料、归档内容及下载相关媒体时直接请求腾讯 QQ、QQ 空间及其媒体域名。</p>
       <h4>3. 登录凭证</h4><p>扫码登录产生的 Cookie 仅用于访问当前账号有权查看的 QQ 空间内容。退出登录或删除所有数据后，本地会话会被清除。</p>

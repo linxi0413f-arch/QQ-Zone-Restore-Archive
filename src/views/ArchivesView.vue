@@ -213,7 +213,7 @@ async function exportHtml(selectedOnly: boolean) {
     const html = await exportArchivedHtml(category.value, selectedOnly ? selectedIds.value : undefined);
     const date = new Date().toISOString().slice(0, 10);
     const path = await save({
-      defaultPath: `QQ空间归档-${categoryLabel.value}-${date}.html`,
+      defaultPath: `QQ空间恢复归档-${categoryLabel.value}-${date}.html`,
       filters: [{ name: "HTML 网页", extensions: ["html"] }],
     });
     if (!path) return;

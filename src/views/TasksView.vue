@@ -32,7 +32,7 @@ async function refresh() {
   if (!loggedIn.value) { skips.value = []; return; }
   try { skips.value = await listArchiveSkips(); } catch { /* 保留当前列表 */ }
 }
-function beginPolling() { clearInterval(timer); timer = setInterval(() => { currentTime.value = Date.now(); void refresh(); }, 600); }
+function beginPolling() { clearInterval(timer); timer = setInterval(() => { currentTime.value = Date.now(); void refresh(); }, 1500); }
 async function start() {
   if (!loggedIn.value) return;
   beginPolling();
@@ -78,7 +78,7 @@ onBeforeUnmount(() => clearInterval(timer));
   </section>
 
   <section v-if="skips.length" class="surface-card task-skips">
-    <div class="task-skips-heading"><div><span><i class="pi pi-exclamation-triangle" /></span><div><p class="section-kicker">SKIPPED REQUESTS</p><h3>异常跳过列表</h3></div></div><small>异常位置不会阻塞后续归档，可逐条重试。</small></div>
+    <div class="task-skips-heading"><div><span><i class="pi pi-exclamation-triangle" /></span><div><p class="section-kicker">SKIPPED REQUESTS</p><h3>异常重试列表</h3></div></div><small>临时接口故障不会再自动大跨度跳过；请稍后逐条重试。</small></div>
     <p v-if="skipNotice" class="task-skip-notice"><i class="pi pi-info-circle" />{{ skipNotice }}</p>
     <div class="task-skip-list">
       <article v-for="item in skips" :key="item.id" class="task-skip-item" :class="{ 'is-resolved': item.resolvedAt }">

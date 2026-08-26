@@ -5,7 +5,7 @@ import { withBase } from "vitepress";
 type Platform = "windows" | "macos" | "android" | "linux";
 type ThemeMode = "system" | "light" | "dark";
 
-const githubUrl = "https://github.com/Gaoshu705/QzoneArchive";
+const githubUrl = "https://github.com/xiaosu19/QQ-Zone-Restore-Archive";
 const releaseUrl = `${githubUrl}/releases/latest`;
 const scrolled = ref(false);
 const selectedPlatform = ref<Platform>("windows");
@@ -91,9 +91,9 @@ onBeforeUnmount(() => {
   <div class="tech-home">
     <header class="tech-nav" :class="{ 'is-scrolled': scrolled }">
       <div class="tech-nav__inner">
-        <a class="tech-brand" :href="withBase('/')" aria-label="QQ空间归档首页">
+        <a class="tech-brand" :href="withBase('/')" aria-label="QQ Zone Restore Archive 首页">
           <img class="tech-brand__mark" :src="withBase('/qzone-archive-icon.png')" alt="" />
-          <span>QQ空间归档</span>
+          <span>QQ Zone Restore Archive</span>
         </a>
         <nav class="tech-nav__links" aria-label="首页导航">
           <a href="#features">能力</a>
@@ -117,8 +117,8 @@ onBeforeUnmount(() => {
       <section class="tech-hero">
         <div class="tech-hero__scene" aria-hidden="true"><span class="tech-hero__beam tech-hero__beam--one"></span><span class="tech-hero__beam tech-hero__beam--two"></span></div>
         <div class="tech-shell tech-hero__content js-reveal">
-          <p class="tech-eyebrow">QZONE ARCHIVE / LOCAL-FIRST</p>
-          <h1>QQ空间归档</h1>
+          <p class="tech-eyebrow">QQ ZONE RESTORE ARCHIVE / LOCAL-FIRST</p>
+          <h1>QQ 空间恢复归档</h1>
           <p class="tech-hero__lead">把 QQ 空间动态、照片和互动，转化为留在你设备上的本地档案。没有云端副本，没有账号系统。</p>
           <div class="tech-actions">
             <a class="tech-button" href="#download">
@@ -139,8 +139,8 @@ npm run tauri:build:windows</code></pre>
 
         <div class="tech-shell tech-hero__visual">
           <div class="tech-shot js-reveal" style="transition-delay: 90ms">
-            <div class="tech-shot__bar"><span></span><span></span><span></span><b>QQ空间归档 / 总览</b></div>
-            <img :src="withBase('/screens/dashboard.png')" alt="QQ空间归档总览界面" />
+            <div class="tech-shot__bar"><span></span><span></span><span></span><b>QQ Zone Restore Archive / 总览</b></div>
+            <img :src="withBase('/screens/dashboard.png')" alt="QQ Zone Restore Archive 总览界面" />
             <span class="tech-scanline" aria-hidden="true"></span>
           </div>
           <div class="tech-annotations js-reveal" style="transition-delay: 160ms" aria-label="产品能力">
@@ -242,7 +242,7 @@ npm run tauri:build:windows</code></pre>
 
     <footer class="tech-footer">
       <div class="tech-shell">
-        <div class="tech-brand"><img class="tech-brand__mark" :src="withBase('/qzone-archive-icon.png')" alt="" /><span>QQ空间归档</span></div>
+        <div class="tech-brand"><img class="tech-brand__mark" :src="withBase('/qzone-archive-icon.png')" alt="" /><span>QQ Zone Restore Archive</span></div>
         <p>把个人记忆，留在自己的设备上。</p>
         <nav aria-label="页脚导航"><a :href="withBase('/intro/')">使用文档</a><a :href="githubUrl">GitHub</a><a :href="`${githubUrl}/blob/main/LICENSE`">许可证</a></nav>
       </div>
