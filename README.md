@@ -36,6 +36,13 @@ AI collaborators: please read AGENTS.md for project-specific instructions, archi
 - **暗色模式**：跟随系统或手动切换
 - **跨平台**：Windows / macOS / Linux 桌面端 + Android 移动端
 
+## v1.0.5 优化
+
+- 新增本人历史说说补齐通道，参考 `GetQzonehistory` 使用 `emotion_cgi_msglist_v6` 分页读取可见说说
+- 将 `commentlist` 与递归 `list_3` 回复链转换为“谁评论、谁回复谁”的结构化互动记录
+- 原互动通知接口发生 HTTP 500 时，仍保留已取得的本人说说与评论，不再显示为 0 条或整次归档失败
+- 合并两套接口的重复点赞、评论和回复，互动数量以去重后的实际展示内容为准
+
 ## v1.0.4 优化
 
 - 媒体时光轴改为稳定的响应式网格，图片异步加载时不再产生大面积空洞

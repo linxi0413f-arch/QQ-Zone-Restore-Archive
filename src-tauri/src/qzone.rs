@@ -11,6 +11,8 @@ use std::sync::{Arc, Mutex};
 use crate::qlogin::QLoginState;
 
 const FEEDS_URL: &str = "https://mobile.qzone.qq.com/get_feeds";
+const OWN_MOMENTS_URL: &str =
+    "https://user.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msglist_v6";
 const FEED_RESPONSE_ATTEMPTS: u32 = 3;
 const RECYCLE_WINDOW_LABEL: &str = "qzone-recycle-auth";
 const RECYCLE_ALBUM_LIST_URL: &str =
@@ -907,6 +909,277 @@ pub struct FeedPage {
     pub(crate) has_more: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct VisibleMomentPage {
+    pub(crate) feeds: Vec<Value>,
+    pub(crate) moment_count: usize,
+    pub(crate) next_pos: u32,
+    pub(crate) has_more: bool,
+}
+
+fn value_text(value: &Value, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        value.get(*name).and_then(|value| match value {
+            Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+    })
+}
+
+fn value_number(value: &Value, names: &[&str]) -> i64 {
+    names
+        .iter()
+        .find_map(|name| {
+            value.get(*name).and_then(|value| {
+                value
+                    .as_i64()
+                    .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+            })
+        })
+        .unwrap_or(0)
+}
+
+fn normalized_moment_pictures(moment: &Value) -> Option<Value> {
+    let pictures = moment.get("pic")?.as_array()?;
+    let pictures = pictures
+        .iter()
+        .filter_map(|picture| {
+            let mut seen = std::collections::HashSet::new();
+            let urls = ["url3", "url2", "url1", "rawUrl", "origin_url", "smallurl"]
+                .iter()
+                .filter_map(|name| value_text(picture, &[*name]))
+                .filter(|url| seen.insert(url.clone()))
+                .map(|url| json!({ "url": url }))
+                .collect::<Vec<_>>();
+            (!urls.is_empty()).then(|| json!({ "photourl": urls }))
+        })
+        .collect::<Vec<_>>();
+    (!pictures.is_empty()).then(|| json!({ "picdata": { "pic": pictures } }))
+}
+
+fn normalized_moment_video(moment: &Value) -> Option<Value> {
+    let from_video_list = moment
+        .get("video")
+        .and_then(Value::as_array)
+        .and_then(|videos| videos.first());
+    let from_picture = moment
+        .get("pic")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|picture| picture.get("video_info"));
+    let video = from_video_list.or(from_picture)?;
+    let url = value_text(video, &["url3", "url2", "url", "video_url"])?;
+    let cover = value_text(video, &["url1", "cover", "cover_url"])
+        .or_else(|| from_video_list.and_then(|value| value_text(value, &["url1"])));
+    let mut result = json!({ "videourl": url });
+    if let Some(cover) = cover {
+        result["coverurl"] = json!([{ "url": cover }]);
+    }
+    Some(result)
+}
+
+fn append_normalized_replies(
+    comments: &[Value],
+    reply_to_uin: Option<&str>,
+    reply_to_name: Option<&str>,
+    replies: &mut Vec<Value>,
+) {
+    for comment in comments {
+        let uin = value_text(comment, &["uin", "fuin", "user_uin"]);
+        let name = value_text(comment, &["name", "nick", "nickname"]);
+        let content = value_text(comment, &["content", "con"]).unwrap_or_default();
+        let created_at = value_number(comment, &["create_time", "created_time", "date"]);
+        replies.push(json!({
+            "user": { "uin": uin, "nickname": name },
+            "replyuser": { "uin": reply_to_uin, "nickname": reply_to_name },
+            "content": content,
+            "date": created_at,
+        }));
+        if let Some(children) = comment.get("list_3").and_then(Value::as_array) {
+            append_normalized_replies(children, uin.as_deref(), name.as_deref(), replies);
+        }
+    }
+}
+
+fn visible_moment_as_feeds(moment: &Value, owner_uin: &str, index: usize) -> Vec<Value> {
+    let tid = value_text(moment, &["tid", "id"])
+        .unwrap_or_else(|| format!("visible-{}-{index}", value_number(moment, &["created_time"])));
+    let created_at = value_number(moment, &["created_time", "create_time", "date"]);
+    let author_uin = value_text(moment, &["uin", "owner_uin"]).unwrap_or_else(|| owner_uin.into());
+    let author_name = value_text(moment, &["name", "nickname"]);
+    let content = value_text(moment, &["content", "con"]).unwrap_or_default();
+    let mut original = json!({
+        "cell_id": { "cellid": tid },
+        "cell_comm": {
+            "appid": 311,
+            "feedskey": format!("311_{author_uin}_{tid}"),
+            "time": created_at,
+        },
+        "cell_summary": { "summary": content },
+        "cell_userinfo": { "user": { "uin": author_uin, "nickname": author_name } },
+    });
+    if let Some(pictures) = normalized_moment_pictures(moment) {
+        original["cell_pic"] = pictures;
+    }
+    if let Some(video) = normalized_moment_video(moment) {
+        original["cell_video"] = video;
+    }
+    let mut feeds = vec![json!({
+        "comm": { "subid": 0, "time": created_at, "feedskey": format!("visible:{tid}") },
+        "userinfo": { "user": { "uin": author_uin, "nickname": author_name } },
+        "original": original,
+    })];
+
+    if let Some(comments) = moment.get("commentlist").and_then(Value::as_array) {
+        for (comment_index, comment) in comments.iter().enumerate() {
+            let comment_uin = value_text(comment, &["uin", "fuin", "user_uin"]);
+            let comment_name = value_text(comment, &["name", "nick", "nickname"]);
+            let comment_content = value_text(comment, &["content", "con"]).unwrap_or_default();
+            let comment_time = value_number(comment, &["create_time", "created_time", "date"]);
+            let comment_id = value_text(comment, &["commentid", "comment_id", "id"])
+                .unwrap_or_else(|| format!("visible:{tid}:{comment_index}"));
+            let mut replies = Vec::new();
+            if let Some(children) = comment.get("list_3").and_then(Value::as_array) {
+                append_normalized_replies(
+                    children,
+                    comment_uin.as_deref(),
+                    comment_name.as_deref(),
+                    &mut replies,
+                );
+            }
+            let mut comment_original = original.clone();
+            comment_original["cell_comment"] = json!({
+                "main_comment": {
+                    "commentid": comment_id,
+                    "user": { "uin": comment_uin, "nickname": comment_name },
+                    "content": comment_content,
+                    "date": comment_time,
+                    "replynum": replies.len(),
+                    "replys": replies,
+                }
+            });
+            feeds.push(json!({
+                "comm": {
+                    "subid": 2,
+                    "time": comment_time,
+                    "feedskey": format!("visible-comment:{tid}:{comment_id}"),
+                },
+                "userinfo": { "user": { "uin": comment_uin, "nickname": comment_name } },
+                "summary": { "summary": comment_content },
+                "original": comment_original,
+            }));
+        }
+    }
+
+    if let Some(likes) = moment.get("__like").and_then(Value::as_array) {
+        for (like_index, like) in likes.iter().enumerate() {
+            let like_uin = value_text(like, &["fuin", "uin"]);
+            let like_name = value_text(like, &["nick", "name", "nickname"]);
+            let like_key = like_uin
+                .clone()
+                .unwrap_or_else(|| format!("index-{like_index}"));
+            feeds.push(json!({
+                "comm": {
+                    "subid": 217,
+                    "time": created_at,
+                    "feedskey": format!("visible-like:{tid}:{like_key}"),
+                },
+                "userinfo": { "user": { "uin": like_uin, "nickname": like_name } },
+                "original": original,
+            }));
+        }
+    }
+    feeds
+}
+
+pub(crate) async fn fetch_visible_moments(
+    state: &QLoginState,
+    pos: u32,
+    num: u32,
+) -> Result<VisibleMomentPage, String> {
+    let auth = state.qzone_auth().await?;
+    let num = num.clamp(1, 40);
+    let query = [
+        ("uin", auth.uin.clone()),
+        ("ftype", "0".into()),
+        ("sort", "0".into()),
+        ("pos", pos.to_string()),
+        ("num", num.to_string()),
+        ("replynum", "100".into()),
+        ("g_tk", auth.g_tk.to_string()),
+        ("callback", "_preloadCallback".into()),
+        ("code_version", "1".into()),
+        ("format", "jsonp".into()),
+        ("need_private_comment", "1".into()),
+    ];
+    let mut last_error = String::new();
+    for attempt in 1..=FEED_RESPONSE_ATTEMPTS {
+        let response = state
+            .client()
+            .get(OWN_MOMENTS_URL)
+            .header(ACCEPT, "*/*")
+            .header(ACCEPT_LANGUAGE, "zh-CN,zh;q=0.9,en;q=0.8")
+            .header(REFERER, format!("https://user.qzone.qq.com/{}/main", auth.uin))
+            .header(USER_AGENT, &auth.user_agent)
+            .header(COOKIE, &auth.cookie_header)
+            .header("Sec-Fetch-Dest", "empty")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Site", "same-origin")
+            .query(&query)
+            .send()
+            .await;
+        match response {
+            Ok(response) => {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .map_err(|error| format!("读取本人说说响应失败：{error}"))?;
+                if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error() {
+                    last_error = format!("HTTP {status}");
+                } else if !status.is_success() {
+                    return Err(format!("获取本人说说失败：HTTP {status}"));
+                } else {
+                    let value = ensure_qzone_success(parse_qzone_json(&body)?)?;
+                    let moments = value
+                        .get("msglist")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    let total = value
+                        .get("total")
+                        .and_then(|value| {
+                            value
+                                .as_u64()
+                                .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+                        })
+                        .unwrap_or((pos as usize + moments.len()) as u64);
+                    let moment_count = moments.len();
+                    let feeds = moments
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(index, moment)| visible_moment_as_feeds(moment, &auth.uin, index))
+                        .collect();
+                    let next_pos = pos.saturating_add(moment_count as u32);
+                    return Ok(VisibleMomentPage {
+                        feeds,
+                        moment_count,
+                        next_pos,
+                        has_more: moment_count > 0 && u64::from(next_pos) < total,
+                    });
+                }
+            }
+            Err(error) => last_error = error.to_string(),
+        }
+        if attempt < FEED_RESPONSE_ATTEMPTS {
+            tokio::time::sleep(feed_retry_delay(attempt)).await;
+        }
+    }
+    Err(format!("获取本人说说失败：{last_error}"))
+}
+
 fn parse_feed_page(value: Value) -> Result<FeedPage, String> {
     if let Some(code) = value.get("code").and_then(Value::as_i64) {
         if code != 0 {
@@ -1212,7 +1485,7 @@ pub async fn fetch_more_feeds(
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_qzone_success, feed_error_can_skip, feed_error_is_transient, parse_feed_page, parse_qzone_json, retryable_response_reason, FEEDS_URL};
+    use super::{ensure_qzone_success, feed_error_can_skip, feed_error_is_transient, parse_feed_page, parse_qzone_json, retryable_response_reason, visible_moment_as_feeds, FEEDS_URL};
     use reqwest::StatusCode;
     use serde_json::json;
 
@@ -1294,6 +1567,57 @@ mod tests {
     fn rejects_response_without_code() {
         let value = serde_json::json!({"data": {"succ_num": 1}});
         assert!(ensure_qzone_success(value).is_err());
+    }
+
+    #[test]
+    fn converts_visible_moment_comments_replies_and_likes() {
+        let feeds = visible_moment_as_feeds(
+            &json!({
+                "tid": "moment-1",
+                "uin": "10001",
+                "name": "本人",
+                "content": "历史说说",
+                "created_time": 100,
+                "pic": [{"url1": "https://example.com/photo.jpg"}],
+                "commentlist": [{
+                    "commentid": "comment-1",
+                    "uin": "20001",
+                    "name": "甲",
+                    "content": "第一条评论",
+                    "create_time": 110,
+                    "list_3": [{
+                        "uin": "30001",
+                        "name": "乙",
+                        "content": "回复甲",
+                        "create_time": 120,
+                        "list_3": [{
+                            "uin": "20001",
+                            "name": "甲",
+                            "content": "回复乙",
+                            "create_time": 130
+                        }]
+                    }]
+                }],
+                "__like": [{"fuin": "40001", "nick": "丙"}]
+            }),
+            "10001",
+            0,
+        );
+        assert_eq!(feeds.len(), 3);
+        assert_eq!(feeds[0]["original"]["cell_id"]["cellid"], "moment-1");
+        assert_eq!(
+            feeds[0]["original"]["cell_pic"]["picdata"]["pic"][0]["photourl"][0]["url"],
+            "https://example.com/photo.jpg"
+        );
+        let replies = feeds[1]["original"]["cell_comment"]["main_comment"]["replys"]
+            .as_array()
+            .unwrap();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(replies[0]["user"]["nickname"], "乙");
+        assert_eq!(replies[0]["replyuser"]["nickname"], "甲");
+        assert_eq!(replies[1]["user"]["nickname"], "甲");
+        assert_eq!(replies[1]["replyuser"]["nickname"], "乙");
+        assert_eq!(feeds[2]["comm"]["subid"], 217);
     }
 
     #[test]

@@ -1418,6 +1418,79 @@ fn skip_probe_offsets(first_advance: i64) -> Vec<i64> {
     offsets
 }
 
+#[derive(Default)]
+struct VisibleSyncSummary {
+    pages: u32,
+    moments: u64,
+    saved: u64,
+}
+
+async fn sync_visible_moments(
+    app: &tauri::AppHandle,
+    login: &QLoginState,
+    archive: &ArchiveState,
+    owner_uin: &str,
+    interval_ms: u64,
+) -> Result<VisibleSyncSummary, String> {
+    let mut summary = VisibleSyncSummary::default();
+    let mut pos = 0_u32;
+    let mut seen_positions = HashSet::new();
+    set_progress(archive, |progress| {
+        progress.message = "正在同步本人可见说说、评论和回复…".into();
+    });
+    loop {
+        if archive.cancel.load(Ordering::Relaxed) {
+            return Ok(summary);
+        }
+        if !seen_positions.insert(pos) {
+            return Err("本人说说接口返回了重复分页位置，已停止以避免死循环".into());
+        }
+        if let Some(retry_at) = reserve_archive_page(app, owner_uin)? {
+            return Err(format!("ARCHIVE_RATE_LIMIT:{retry_at}"));
+        }
+        let page = qzone::fetch_visible_moments(login, pos, 40).await?;
+        if page.moment_count == 0 {
+            return Ok(summary);
+        }
+        let feed_count = page.feeds.len() as u64;
+        let saved = save_retried_page(app, owner_uin, &page.feeds)?;
+        summary.pages = summary.pages.saturating_add(1);
+        summary.moments = summary
+            .moments
+            .saturating_add(page.moment_count as u64);
+        summary.saved = summary.saved.saturating_add(saved);
+        set_progress(archive, |progress| {
+            progress.pages = progress.pages.saturating_add(1);
+            progress.fetched = progress.fetched.saturating_add(feed_count);
+            progress.saved = progress.saved.saturating_add(saved);
+            progress.message = format!(
+                "已同步 {} 条本人说说及其评论回复，正在继续读取历史…",
+                summary.moments
+            );
+        });
+        if !page.has_more {
+            return Ok(summary);
+        }
+        if page.next_pos <= pos {
+            return Err("本人说说接口未推进分页位置，已停止以避免死循环".into());
+        }
+        pos = page.next_pos;
+        tokio::time::sleep(std::time::Duration::from_millis(archive_page_delay_ms(
+            interval_ms,
+        )))
+        .await;
+    }
+}
+
+fn interaction_error_can_be_partial(error: &str) -> bool {
+    error.contains("QQ 空间接口暂时不可用")
+        || error.starts_with("获取空间动态失败")
+        || error.starts_with("解析空间动态失败")
+        || error.starts_with("QQ 空间动态接口返回错误")
+        || error.starts_with("动态响应中缺少 data")
+        || error.starts_with("上次异常位置仍标记为临时接口故障")
+}
+
 #[tauri::command]
 pub async fn start_feed_archive(
     app: tauri::AppHandle,
@@ -1470,7 +1543,19 @@ pub async fn start_feed_archive(
             progress.message = format!("已恢复上次进度：{} 页，正在继续归档…", checkpoint.pages);
         });
     }
-    let result: Result<(), String> = async {
+    let mut visible_summary = VisibleSyncSummary::default();
+    let mut visible_sync_error: Option<String> = None;
+    let interaction_result: Result<(), String> = async {
+        match sync_visible_moments(&app, &login, &archive, &owner_uin, interval_ms).await {
+            Ok(summary) => visible_summary = summary,
+            Err(error) if error.starts_with("ARCHIVE_RATE_LIMIT:") => return Err(error),
+            Err(error) => {
+                visible_sync_error = Some(concise_archive_error(&error));
+                set_progress(&archive, |progress| {
+                    progress.message = "本人说说接口暂时不可用，正在改用互动通知接口继续归档…".into();
+                });
+            }
+        }
         loop {
             if archive.cancel.load(Ordering::Relaxed) {
                 return Ok(());
@@ -1652,6 +1737,14 @@ pub async fn start_feed_archive(
         }
     }
     .await;
+    let result = match interaction_result {
+        Err(error)
+            if visible_summary.moments > 0 && interaction_error_can_be_partial(&error) =>
+        {
+            Err(format!("ARCHIVE_INTERACTIONS_UNAVAILABLE:{error}"))
+        }
+        result => result,
+    };
     match &result {
         Ok(()) if archive.cancel.load(Ordering::Relaxed) => set_progress(&archive, |p| {
             p.status = "cancelled";
@@ -1660,16 +1753,36 @@ pub async fn start_feed_archive(
         }),
         Ok(()) => set_progress(&archive, |p| {
             p.status = "completed";
-            p.message = if p.skipped > 0 {
+            p.message = if let Some(error) = visible_sync_error.as_deref() {
                 format!(
-                    "归档完成，共保存 {} 条记录；另有 {} 个异常位置已跳过，可在下方单独重试",
-                    p.saved, p.skipped
+                    "互动通知归档已完成；但本人完整说说接口暂时不可用（{error}），稍后重试可补齐本人历史和评论回复"
+                )
+            } else if p.skipped > 0 {
+                format!(
+                    "归档完成：已同步 {} 条本人说说，共保存 {} 条接口记录；另有 {} 个异常位置可单独重试",
+                    visible_summary.moments, p.saved, p.skipped
                 )
             } else {
-                format!("归档完成，共保存 {} 条记录", p.saved)
+                format!(
+                    "归档完成：已同步 {} 条本人说说及其评论回复，共保存 {} 条接口记录",
+                    visible_summary.moments, p.saved
+                )
             };
             p.retry_at = None;
         }),
+        Err(error) if error.starts_with("ARCHIVE_INTERACTIONS_UNAVAILABLE:") => {
+            set_progress(&archive, |p| {
+                let detail = concise_archive_error(
+                    error.trim_start_matches("ARCHIVE_INTERACTIONS_UNAVAILABLE:"),
+                );
+                p.status = "completed";
+                p.message = format!(
+                    "已保存 {} 条本人可见说说及其评论回复；互动通知接口暂时不可用（{}），因此点赞和仅残留于互动记录的已删除说说尚未补齐，请稍后继续归档",
+                    visible_summary.moments, detail
+                );
+                p.retry_at = None;
+            });
+        }
         Err(error) if error.starts_with("ARCHIVE_RATE_LIMIT:") => set_progress(&archive, |p| {
             let retry_at = error
                 .trim_start_matches("ARCHIVE_RATE_LIMIT:")
@@ -1702,9 +1815,10 @@ pub async fn start_feed_archive(
         .lock()
         .map_err(|_| "归档状态锁已损坏")?
         .clone();
-    if result
-        .as_ref()
-        .is_err_and(|error| error.starts_with("ARCHIVE_RATE_LIMIT:"))
+    if result.as_ref().is_err_and(|error| {
+        error.starts_with("ARCHIVE_RATE_LIMIT:")
+            || error.starts_with("ARCHIVE_INTERACTIONS_UNAVAILABLE:")
+    })
     {
         Ok(progress)
     } else {
@@ -1902,6 +2016,7 @@ pub async fn list_archived_feeds(
             })
             .map_err(|error| format!("查询动态评论失败：{error}"))?;
         item.comments = merge_comments(comments.filter_map(Result::ok));
+        item.comment_count = comment_interaction_count(&item.comments);
     }
     drop(comment_statement);
     let mut like_statement = connection
@@ -1919,7 +2034,8 @@ pub async fn list_archived_feeds(
                 })
             })
             .map_err(|error| format!("查询点赞用户失败：{error}"))?;
-        item.likes = likes.filter_map(Result::ok).collect();
+        item.likes = deduplicate_likes(likes.filter_map(Result::ok));
+        item.like_count = item.likes.len() as i64;
     }
     Ok(items)
     })
@@ -2054,6 +2170,7 @@ pub async fn get_archived_feed(
         })
         .map_err(|error| format!("查询动态评论失败：{error}"))?
         .filter_map(Result::ok));
+    item.comment_count = comment_interaction_count(&item.comments);
     drop(comments);
     let mut likes_stmt = connection
         .prepare(
@@ -2061,7 +2178,7 @@ pub async fn get_archived_feed(
          WHERE owner_uin=?1 AND cell_id=?2 AND event_type=217 ORDER BY event_time ASC",
         )
         .map_err(|error| format!("准备点赞查询失败：{error}"))?;
-    item.likes = likes_stmt
+    item.likes = deduplicate_likes(likes_stmt
         .query_map(params![item.owner_uin, item.cell_id], |row| {
             Ok(LikeUser {
                 uin: row.get(0)?,
@@ -2070,7 +2187,8 @@ pub async fn get_archived_feed(
         })
         .map_err(|error| format!("查询点赞用户失败：{error}"))?
         .filter_map(Result::ok)
-        .collect();
+        .collect::<Vec<_>>());
+    item.like_count = item.likes.len() as i64;
     Ok(item)
 }
 
@@ -2217,6 +2335,23 @@ fn merge_comments(comments: impl IntoIterator<Item = ArchiveComment>) -> Vec<Arc
     merged
 }
 
+fn comment_interaction_count(comments: &[ArchiveComment]) -> i64 {
+    comments
+        .iter()
+        .map(|comment| 1_i64.saturating_add(comment.replies.len() as i64))
+        .sum()
+}
+
+fn deduplicate_likes(likes: impl IntoIterator<Item = LikeUser>) -> Vec<LikeUser> {
+    let mut seen = HashSet::new();
+    likes
+        .into_iter()
+        .filter(|like| {
+            seen.insert((like.uin.clone().unwrap_or_default(), like.nickname.clone().unwrap_or_default()))
+        })
+        .collect()
+}
+
 fn validate_category(category: &str) -> Result<(), String> {
     match category {
         "self" | "other" | "guestbook" => Ok(()),
@@ -2321,6 +2456,7 @@ fn archive_items_for_export(
             })
             .map_err(|error| format!("查询导出评论失败：{error}"))?;
         item.comments = merge_comments(rows.filter_map(Result::ok));
+        item.comment_count = comment_interaction_count(&item.comments);
     }
     drop(comments);
     let mut export_likes = connection
@@ -2338,7 +2474,8 @@ fn archive_items_for_export(
                 })
             })
             .map_err(|error| format!("查询导出点赞用户失败：{error}"))?;
-        item.likes = likes.filter_map(Result::ok).collect();
+        item.likes = deduplicate_likes(likes.filter_map(Result::ok));
+        item.like_count = item.likes.len() as i64;
     }
     Ok(items)
 }
