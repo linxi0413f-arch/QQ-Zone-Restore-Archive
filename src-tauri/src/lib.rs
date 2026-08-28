@@ -1,4 +1,5 @@
 mod archive;
+mod privacy;
 mod qlogin;
 mod qzone;
 
@@ -27,6 +28,8 @@ pub fn run() {
             qlogin::logout_qzone,
             qlogin::open_web_login,
             qlogin::check_web_login,
+            privacy::get_privacy_status,
+            privacy::delete_current_account_data,
             qzone::fetch_first_feeds,
             qzone::fetch_more_feeds,
             qzone::open_recycle_password_window,
