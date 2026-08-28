@@ -5,13 +5,15 @@ use std::{
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use encoding_rs::GBK;
 use regex::Regex;
 use reqwest::{
-    header::{COOKIE, USER_AGENT},
+    header::{ACCEPT, CONTENT_TYPE, COOKIE, REFERER, USER_AGENT},
     redirect::Policy,
     Client, Response,
 };
 use serde::Serialize;
+use serde_json::Value;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::Mutex;
 use url::Url;
@@ -23,7 +25,7 @@ const MOBILE_USER_AGENTS: &[&str] = &[
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (Linux; Android 15; Pixel 8 Build/AP3A.241105.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; SM-S9280 Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Linux; Android 14; 23127PN0CC Build/UKQ1.231003.002) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; 23127PN0CC Build/UP1A.231003.002) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (Linux; Android 14; V2309A Build/UP1A.231005.007) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Mobile Safari/537.36",
 ];
 static USER_AGENT_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
@@ -119,11 +121,16 @@ pub struct QrLoginStart {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginCredentials {
+pub struct LoginIdentity {
     uin: String,
-    g_tk: i64,
-    cookies: HashMap<String, String>,
-    user_agent: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QzoneLoginUser {
+    uin: String,
+    nickname: String,
+    avatar_image: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -131,7 +138,7 @@ pub struct LoginCredentials {
 pub struct LoginStatus {
     status: &'static str,
     message: String,
-    auth: Option<LoginCredentials>,
+    user: Option<LoginIdentity>,
 }
 
 fn unix_millis() -> u128 {
@@ -327,6 +334,149 @@ fn normalized_uin(value: &str) -> String {
         .to_owned()
 }
 
+fn login_identity(session: &LoginSession) -> Option<LoginIdentity> {
+    Some(LoginIdentity {
+        uin: session.uin.clone()?,
+    })
+}
+
+fn decode_qq_text(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            let (text, _, _) = GBK.decode(bytes);
+            text.into_owned()
+        }
+    }
+}
+
+fn parse_user_info_jsonp(text: &str) -> Result<Value, String> {
+    let start = text.find('{').ok_or("用户资料响应格式不正确")?;
+    let end = text.rfind('}').ok_or("用户资料响应格式不正确")?;
+    if end < start {
+        return Err("用户资料响应格式不正确".into());
+    }
+    serde_json::from_str(&text[start..=end]).map_err(|error| format!("解析用户资料失败：{error}"))
+}
+
+async fn request_user_info(client: &Client, auth: &QzoneAuth, url: &str) -> Result<Value, String> {
+    let response = client
+        .get(url)
+        .header(ACCEPT, "application/json, text/javascript, */*; q=0.01")
+        .header(COOKIE, &auth.cookie_header)
+        .header(REFERER, format!("https://user.qzone.qq.com/{}", auth.uin))
+        .header(USER_AGENT, &auth.user_agent)
+        .send()
+        .await
+        .map_err(|error| format!("获取用户资料失败：{error}"))?;
+    let status = response.status();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|error| format!("读取用户资料失败：{error}"))?;
+    if !status.is_success() {
+        return Err(format!("获取用户资料失败：HTTP {status}"));
+    }
+    let value = parse_user_info_jsonp(&decode_qq_text(&bytes))?;
+    let code = value
+        .get("code")
+        .and_then(|code| code.as_i64().or_else(|| code.as_str().and_then(|text| text.parse().ok())))
+        .unwrap_or(-1);
+    if code != 0 {
+        let message = value
+            .get("message")
+            .or_else(|| value.get("msg"))
+            .and_then(Value::as_str)
+            .unwrap_or("QQ 用户资料接口返回错误");
+        return Err(message.to_owned());
+    }
+    value
+        .get("data")
+        .cloned()
+        .ok_or_else(|| "QQ 用户资料响应缺少 data".into())
+}
+
+async fn fetch_login_avatar(client: &Client, auth: &QzoneAuth, url: &str) -> Option<String> {
+    let response = client
+        .get(url)
+        .header(COOKIE, &auth.cookie_header)
+        .header(USER_AGENT, &auth.user_agent)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_owned();
+    let bytes = response.bytes().await.ok()?;
+    Some(format!(
+        "data:{content_type};base64,{}",
+        BASE64.encode(bytes)
+    ))
+}
+
+#[tauri::command]
+pub async fn get_login_user(
+    state: tauri::State<'_, QLoginState>,
+) -> Result<QzoneLoginUser, String> {
+    let auth = state.qzone_auth().await?;
+    let client = state.client();
+
+    let mut vip_url = Url::parse(
+        "https://h5.qzone.qq.com/proxy/domain/vip.qzone.qq.com/fcg-bin/fcg_get_vipinfo_mobile",
+    )
+    .map_err(|error| format!("用户资料地址无效：{error}"))?;
+    vip_url
+        .query_pairs_mut()
+        .append_pair("get_all", "1")
+        .append_pair("uin", &auth.uin)
+        .append_pair("g_tk", &auth.g_tk.to_string());
+
+    let data = match request_user_info(&client, &auth, vip_url.as_str()).await {
+        Ok(data) => data,
+        Err(_) => {
+            let mut legacy_url = Url::parse(
+                "https://h5.qzone.qq.com/proxy/domain/base.qzone.qq.com/cgi-bin/user/cgi_userinfo_get_all",
+            )
+            .map_err(|error| format!("用户资料地址无效：{error}"))?;
+            legacy_url
+                .query_pairs_mut()
+                .append_pair("uin", &auth.uin)
+                .append_pair("vuin", &auth.uin)
+                .append_pair("fupdate", "1")
+                .append_pair("rd", &format!("{}", unix_millis()))
+                .append_pair("g_tk", &auth.g_tk.to_string());
+            request_user_info(&client, &auth, legacy_url.as_str()).await?
+        }
+    };
+
+    let nickname = data
+        .get("nickname")
+        .or_else(|| data.get("nick"))
+        .or_else(|| data.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("QQ 用户")
+        .to_owned();
+    let avatar_url = data
+        .get("avatar")
+        .or_else(|| data.get("face"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("https://q1.qlogo.cn/g?b=qq&nk={}&s=100", auth.uin));
+    let avatar_image = fetch_login_avatar(&client, &auth, &avatar_url).await;
+
+    Ok(QzoneLoginUser {
+        uin: auth.uin,
+        nickname,
+        avatar_image,
+    })
+}
+
 async fn fetch_login_sig(
     client: &Client,
     user_agent: &str,
@@ -371,24 +521,6 @@ fn poll_login_url(text: &str) -> Option<String> {
         .map(|m| m.as_str())
         .collect();
     (values.len() >= 3 && values[0] == "0").then(|| values[2].to_owned())
-}
-
-fn login_credentials(session: &LoginSession) -> Option<LoginCredentials> {
-    let uin = session.uin.clone()?;
-    let g_tk = session.g_tk?;
-    let allowed = ["uin", "skey", "p_uin", "pt4_token", "p_skey", "pt2gguin"];
-    let cookies = session
-        .cookies
-        .iter()
-        .filter(|(name, value)| allowed.contains(&name.as_str()) && !value.is_empty())
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    Some(LoginCredentials {
-        uin,
-        g_tk,
-        cookies,
-        user_agent: session.user_agent.clone(),
-    })
 }
 
 /// 登录成功后访问 QQ 空间 H5 首页，收集追踪 Cookie 并设置用户标识。
@@ -579,28 +711,28 @@ pub async fn poll_qr_login(state: tauri::State<'_, QLoginState>) -> Result<Login
         return Ok(LoginStatus {
             status: "waiting",
             message: "请使用手机 QQ 扫描二维码".into(),
-            auth: None,
+            user: None,
         });
     }
     if text.contains("'67'") || text.contains("二维码认证中") {
         return Ok(LoginStatus {
             status: "scanned",
             message: "已扫码，请在手机上确认登录".into(),
-            auth: None,
+            user: None,
         });
     }
     if text.contains("'65'") || text.contains("二维码已失效") {
         return Ok(LoginStatus {
             status: "expired",
             message: "二维码已失效，请刷新后重试".into(),
-            auth: None,
+            user: None,
         });
     }
     if !(text.contains("'0'") || text.contains("登录成功")) {
         return Ok(LoginStatus {
             status: "error",
             message: "QQ 登录返回了无法识别的状态".into(),
-            auth: None,
+            user: None,
         });
     }
 
@@ -640,11 +772,11 @@ pub async fn poll_qr_login(state: tauri::State<'_, QLoginState>) -> Result<Login
     // 预热：访问 H5 QQ 空间首页，收集完整的追踪 Cookie
     let warmup_ua = session.user_agent.clone();
     warmup_qzone_session(&state.client, &mut session.cookies, &warmup_ua, &uin).await;
-    let auth = login_credentials(session).ok_or("登录凭证不完整")?;
+    let user = login_identity(session).ok_or("登录凭证不完整")?;
     Ok(LoginStatus {
         status: "success",
         message: "登录成功".into(),
-        auth: Some(auth),
+        user: Some(user),
     })
 }
 
@@ -652,18 +784,18 @@ pub async fn poll_qr_login(state: tauri::State<'_, QLoginState>) -> Result<Login
 pub async fn get_login_status(state: tauri::State<'_, QLoginState>) -> Result<LoginStatus, String> {
     let guard = state.session.lock().await;
     if let Some(session) = guard.as_ref() {
-        if let Some(auth) = login_credentials(session) {
+        if let Some(user) = login_identity(session) {
             return Ok(LoginStatus {
                 status: "success",
                 message: "已登录".into(),
-                auth: Some(auth),
+                user: Some(user),
             });
         }
     }
     Ok(LoginStatus {
         status: "loggedOut",
         message: "尚未登录".into(),
-        auth: None,
+        user: None,
     })
 }
 
@@ -680,7 +812,7 @@ pub async fn open_web_login(app: tauri::AppHandle) -> Result<LoginStatus, String
         return Ok(LoginStatus {
             status: "webLoginOpened",
             message: "登录窗口已打开，请在窗口中完成 QQ 登录".into(),
-            auth: None,
+            user: None,
         });
     }
 
@@ -704,7 +836,7 @@ pub async fn open_web_login(app: tauri::AppHandle) -> Result<LoginStatus, String
     Ok(LoginStatus {
         status: "webLoginOpened",
         message: "请在打开的窗口中完成 QQ 登录".into(),
-        auth: None,
+        user: None,
     })
 }
 
@@ -717,7 +849,7 @@ pub async fn check_web_login(
         return Ok(LoginStatus {
             status: "webLoginCancelled",
             message: "登录窗口已关闭".into(),
-            auth: None,
+            user: None,
         });
     };
 
@@ -751,7 +883,7 @@ pub async fn check_web_login(
             return Ok(LoginStatus {
                 status: "webLoginWaiting",
                 message: "等待登录完成…".into(),
-                auth: None,
+                user: None,
             });
         }
     };
@@ -782,7 +914,7 @@ pub async fn check_web_login(
         ..Default::default()
     };
 
-    let auth = login_credentials(&session).ok_or("登录凭证不完整")?;
+    let user = login_identity(&session).ok_or("登录凭证不完整")?;
 
     if let Some(w) = app.get_webview_window(WEB_LOGIN_WINDOW_LABEL) {
         w.close().ok();
@@ -793,38 +925,6 @@ pub async fn check_web_login(
     Ok(LoginStatus {
         status: "success",
         message: "登录成功".into(),
-        auth: Some(auth),
+        user: Some(user),
     })
-}
-
-// Cookie 注入只服务于桌面端额外的 QQ 空间 WebView。iOS/Android 的
-// WKWebView/系统 WebView 不应从异步 command 线程直接操作原生 Cookie Store，
-// 否则登录成功后可能触发 WebKit 主线程/RunLoop 竞态并以 SIGABRT 退出。
-#[cfg(any(target_os = "ios", target_os = "android"))]
-#[tauri::command]
-pub async fn sync_cookies_to_webview() -> Result<(), String> {
-    Ok(())
-}
-
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-#[tauri::command]
-pub async fn sync_cookies_to_webview(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, QLoginState>,
-) -> Result<(), String> {
-    let guard = state.session.lock().await;
-    let session = guard.as_ref().ok_or("尚未登录，无法同步 Cookie")?;
-    let Some(main_window) = app.get_webview_window("main") else {
-        return Ok(()); // 没有主窗口则跳过
-    };
-    for (name, value) in &session.cookies {
-        if value.trim().is_empty() {
-            continue;
-        }
-        let cookie_str = format!("{name}={value}; Domain=.qq.com; Path=/");
-        if let Ok(c) = cookie_str.parse::<cookie::Cookie>() {
-            main_window.set_cookie(c).ok();
-        }
-    }
-    Ok(())
 }
