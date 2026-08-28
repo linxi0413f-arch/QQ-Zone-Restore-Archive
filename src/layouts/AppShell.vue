@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useRoute, useRouter } from "vue-router";
 import { platform } from "@tauri-apps/plugin-os";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import Button from "primevue/button";
 import Drawer from "primevue/drawer";
 import Popover from "primevue/popover";
@@ -30,29 +31,17 @@ const navigation = [
   { label: "联系人", icon: "pi pi-users", to: "/contacts" },
   { label: "媒体", icon: "pi pi-images", to: "/media" },
   { label: "任务", icon: "pi pi-sync", to: "/tasks" },
-  { label: "回收站", icon: "pi pi-trash", to: "/recycle-bin" },
   { label: "设置", icon: "pi pi-cog", to: "/settings" },
 ];
 const mobileNavigation = [navigation[0], navigation[1], navigation[3], navigation[4]];
-const mobileMoreNavigation = [navigation[2], navigation[6]];
+const mobileMoreNavigation = [navigation[2], navigation[5]];
 const moreActive = computed(() => mobileMoreNavigation.some((item) => item.to === route.path));
 function qzoneUrl() {
   const uin = user.value?.uin;
-  if (platform() === "android") return uin ? `https://m.qzone.qq.com/${uin}` : "https://m.qzone.qq.com";
-  return uin ? `https://user.qzone.qq.com/${uin}` : "https://user.qzone.qq.com";
+  return uin ? `https://user.qzone.qq.com/${uin}` : "https://qzone.qq.com";
 }
 async function openQzoneWindow() {
-  try {
-    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-    const existing = await WebviewWindow.getByLabel("qzone-browser");
-    if (existing) { await existing.setFocus(); return; }
-    await new WebviewWindow("qzone-browser", {
-      url: qzoneUrl(), title: "QQ 空间", width: 1000, height: 720, minWidth: 480, minHeight: 500, center: true,
-    });
-  } catch {
-    const { openUrl } = await import("@tauri-apps/plugin-opener");
-    await openUrl(qzoneUrl());
-  }
+  await openUrl(qzoneUrl());
 }
 
 function handleAccountClick(event: MouseEvent) {
@@ -102,7 +91,7 @@ async function logout() {
           <Popover ref="accountPopover" class="account-popover">
             <div class="account-popover-profile"><span class="account-popover-avatar"><img v-if="user?.avatarImage" :src="user.avatarImage" alt="" /><i v-else class="pi pi-user" /></span><div><strong>{{ user?.nickname }}</strong><span>QQ {{ user?.uin }}</span></div></div>
             <div class="account-popover-divider" />
-            <Button v-if="showQzoneButton" label="QQ 空间" icon="pi pi-globe" severity="secondary" text @click="openQzoneWindow(); accountPopover?.hide()" />
+            <Button v-if="showQzoneButton" label="QQ 空间（系统浏览器）" icon="pi pi-globe" severity="secondary" text @click="openQzoneWindow(); accountPopover?.hide()" />
             <Button label="退出登录" icon="pi pi-sign-out" severity="danger" text :loading="logoutLoading" @click="logout" />
           </Popover>
         </div>

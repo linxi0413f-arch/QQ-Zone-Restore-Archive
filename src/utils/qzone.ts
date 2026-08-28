@@ -57,6 +57,27 @@ export const deleteArchivedFeeds = (ids: number[]) => invoke<number>("delete_arc
 export const clearArchivedFeeds = () => invoke<number>("clear_archived_feeds");
 export const deleteAllAppData = () => invoke<void>("delete_all_app_data");
 
+export interface PrivacyStatus {
+  localOnly: boolean;
+  telemetryEnabled: boolean;
+  cloudStorageEnabled: boolean;
+  credentialsPersisted: boolean;
+  developerServerUsed: boolean;
+  currentUin?: string;
+  appDataDir: string;
+  cacheDir: string;
+  databasePath: string;
+}
+
+export interface DeleteCurrentAccountResult {
+  uin: string;
+  deletedRows: number;
+  mediaCacheCleared: boolean;
+}
+
+export const getPrivacyStatus = () => invoke<PrivacyStatus>("get_privacy_status");
+export const deleteCurrentAccountData = () => invoke<DeleteCurrentAccountResult>("delete_current_account_data");
+
 export const openRecyclePasswordWindow = () => invoke<void>("open_recycle_password_window");
 export const checkRecyclePassword = () => invoke<string | null>("check_recycle_password");
 export const closeRecyclePasswordWindow = () => invoke<void>("close_recycle_password_window");

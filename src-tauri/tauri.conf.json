@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "QQ Zone Restore Archive",
+  "productName": "QQ Zone Restore Archive Local",
   "version": "1.0.9",
-  "identifier": "top.ehre.qzonearchive",
+  "identifier": "com.linxi0413f.qzonearchive.local",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "QQ 空间恢复归档",
+        "title": "QQ 空间恢复归档 · 本机版",
         "width": 1180,
         "height": 760,
         "minWidth": 760,
@@ -21,7 +21,7 @@
         "center": true,
         "zoomHotkeysEnabled": false,
         "browserExtensionsEnabled": false,
-        "devtools": true
+        "devtools": false
       }
     ],
     "security": {
@@ -35,11 +35,11 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "dmg", "app"],
-    "publisher": "xiaosu19",
+    "publisher": "linxi0413f-arch",
     "category": "Utility",
-    "shortDescription": "尝试从互动记录还原 QQ 空间动态，并将照片、视频与评论安全归档到本地。",
-    "longDescription": "QQ Zone Restore Archive 是基于 QzoneArchive 二次开发的本地归档工具，可尝试从仍存在的互动记录中还原动态、照片、视频、点赞和评论；不保证能够恢复没有互动痕迹或已被服务端彻底清除的内容。",
-    "copyright": "Copyright © 2026 xiaosu19 and QzoneArchive contributors",
+    "shortDescription": "纯本机 QQ 空间动态恢复与归档工具。",
+    "longDescription": "QQ Zone Restore Archive Local 是基于 GPLv3 上游项目二次开发的纯本机归档工具，可尝试从仍存在的互动记录中还原动态、照片、视频、点赞和评论。QQ 登录凭证仅保存在后端内存，归档数据保存在本机，不经过开发者自建服务器；不保证能够恢复没有互动痕迹或已被服务端彻底清除的内容。",
+    "copyright": "Copyright © 2026 xiaosu19, QzoneArchive contributors and linxi0413f-arch",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -80,10 +80,10 @@
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false,
         "compression": "lzma",
-        "startMenuFolder": "QQ Zone Restore Archive"
+        "startMenuFolder": "QQ Zone Restore Archive Local"
       },
       "wix": {
-        "upgradeCode": "24779296-0f03-5f99-83ea-fc2fcda733b9",
+        "upgradeCode": "27422727-7942-44c2-8438-d6e24fa19454",
         "language": ["zh-CN", "en-US"]
       }
     }
