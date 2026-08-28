@@ -13,6 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce local-only privacy boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eq 'qlogin::(open_web_login|check_web_login|sync_cookies_to_webview)' src-tauri/src/lib.rs; then
+            echo 'Web login or cookie synchronization must not be exposed as a Tauri command.' >&2
+            exit 1
+          fi
+          if grep -REq 'openWebLogin|checkWebLogin|syncCookiesToWebview|LoginCredentials|WebviewWindow' src --include='*.ts' --include='*.vue'; then
+            echo 'Frontend must not handle QQ credentials or create QQ login WebViews.' >&2
+            exit 1
+          fi
+          grep -Eq '"devtools"[[:space:]]*:[[:space:]]*false' src-tauri/tauri.conf.json
+          if grep -Eiq 'sentry|posthog|segment|google-analytics|appcenter' package.json src-tauri/Cargo.toml; then
+            echo 'Telemetry/crash-reporting dependency detected.' >&2
+            exit 1
+          fi
+          echo 'Local-only privacy gate passed.'
+
   rust:
     runs-on: ubuntu-latest
     steps:
