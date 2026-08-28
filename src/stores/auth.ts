@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { getQzoneLoginUser, type LoginCredentials, openWebLogin, checkWebLogin, syncCookiesToWebview } from "../utils/qlogin";
+import { getQzoneLoginUser, type LoginIdentity, openWebLogin, checkWebLogin } from "../utils/qlogin";
 import { useRecycleSessionStore } from "./recycle";
 
 export interface LoginUser {
@@ -13,7 +13,7 @@ export interface LoginUser {
 interface LoginStatus {
   status: "waiting" | "scanned" | "expired" | "success" | "error" | "loggedOut" | "webLoginOpened" | "webLoginWaiting" | "webLoginCancelled";
   message: string;
-  auth?: LoginCredentials;
+  user?: LoginIdentity;
 }
 
 interface QrLoginStart {
@@ -29,20 +29,26 @@ export const useAuthStore = defineStore("auth", () => {
   const status = ref<LoginStatus["status"]>("loggedOut");
   const message = ref("使用手机 QQ 扫码登录");
   const user = ref<LoginUser>();
-  const credentials = ref<LoginCredentials>();
   const webLoginMode = ref(false);
   let pollingRun = 0;
 
   const loggedIn = computed(() => status.value === "success" && Boolean(user.value));
+
+  async function loadLoginUser(identity: LoginIdentity) {
+    try {
+      return await getQzoneLoginUser();
+    } catch {
+      return { uin: identity.uin, nickname: "QQ 用户" } satisfies LoginUser;
+    }
+  }
 
   async function restoreSession() {
     try {
       const result = await invoke<LoginStatus>("get_login_status");
       status.value = result.status;
       message.value = result.message;
-      if (result.status === "success" && result.auth) {
-        credentials.value = result.auth;
-        user.value = await getQzoneLoginUser(result.auth);
+      if (result.status === "success" && result.user) {
+        user.value = await loadLoginUser(result.user);
       }
     } catch {
       status.value = "loggedOut";
@@ -79,11 +85,9 @@ export const useAuthStore = defineStore("auth", () => {
         status.value = result.status;
         message.value = result.message;
         if (result.status === "success") {
-          if (!result.auth) throw new Error("Rust 后端未返回完整登录凭证");
+          if (!result.user) throw new Error("Rust 后端未返回登录用户信息");
           message.value = "正在获取用户资料…";
-          credentials.value = result.auth;
-          user.value = await getQzoneLoginUser(result.auth);
-          syncCookiesToWebview().catch(() => {});
+          user.value = await loadLoginUser(result.user);
           await delay(700);
           dialogVisible.value = false;
           pollingRun += 1;
@@ -125,10 +129,8 @@ export const useAuthStore = defineStore("auth", () => {
         status.value = result.status;
         message.value = result.message;
         if (result.status === "success") {
-          if (!result.auth) throw new Error("后端未返回登录凭证");
-          credentials.value = result.auth;
-          user.value = await getQzoneLoginUser(result.auth);
-          syncCookiesToWebview().catch(() => {});
+          if (!result.user) throw new Error("后端未返回登录用户信息");
+          user.value = await loadLoginUser(result.user);
           await delay(700);
           dialogVisible.value = false;
           webLoginMode.value = false;
@@ -172,7 +174,6 @@ export const useAuthStore = defineStore("auth", () => {
     } finally {
       useRecycleSessionStore().clear();
       user.value = undefined;
-      credentials.value = undefined;
       qrImage.value = "";
       status.value = "loggedOut";
       message.value = "尚未登录";
