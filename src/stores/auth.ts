@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
-import { getQzoneLoginUser, type LoginIdentity, openWebLogin, checkWebLogin } from "../utils/qlogin";
+import { getQzoneLoginUser, type LoginIdentity } from "../utils/qlogin";
 import { useRecycleSessionStore } from "./recycle";
 
 export interface LoginUser {
@@ -11,7 +11,7 @@ export interface LoginUser {
 }
 
 interface LoginStatus {
-  status: "waiting" | "scanned" | "expired" | "success" | "error" | "loggedOut" | "webLoginOpened" | "webLoginWaiting" | "webLoginCancelled";
+  status: "waiting" | "scanned" | "expired" | "success" | "error" | "loggedOut";
   message: string;
   user?: LoginIdentity;
 }
@@ -29,7 +29,6 @@ export const useAuthStore = defineStore("auth", () => {
   const status = ref<LoginStatus["status"]>("loggedOut");
   const message = ref("使用手机 QQ 扫码登录");
   const user = ref<LoginUser>();
-  const webLoginMode = ref(false);
   let pollingRun = 0;
 
   const loggedIn = computed(() => status.value === "success" && Boolean(user.value));
@@ -52,6 +51,7 @@ export const useAuthStore = defineStore("auth", () => {
       }
     } catch {
       status.value = "loggedOut";
+      user.value = undefined;
     }
   }
 
@@ -108,63 +108,6 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  async function startWebLogin() {
-    const run = ++pollingRun;
-    loading.value = true;
-    webLoginMode.value = true;
-    qrImage.value = "";
-    status.value = "webLoginOpened";
-    message.value = "正在打开登录窗口…";
-    try {
-      const result = await openWebLogin();
-      if (run !== pollingRun) return;
-      status.value = result.status;
-      message.value = result.message;
-      loading.value = false;
-      while (run === pollingRun && dialogVisible.value && webLoginMode.value) {
-        await delay(2000);
-        if (run !== pollingRun || !dialogVisible.value || !webLoginMode.value) return;
-        const result = await checkWebLogin();
-        if (run !== pollingRun) return;
-        status.value = result.status;
-        message.value = result.message;
-        if (result.status === "success") {
-          if (!result.user) throw new Error("后端未返回登录用户信息");
-          user.value = await loadLoginUser(result.user);
-          await delay(700);
-          dialogVisible.value = false;
-          webLoginMode.value = false;
-          pollingRun += 1;
-          return;
-        }
-        if (result.status === "webLoginCancelled") {
-          webLoginMode.value = false;
-          return;
-        }
-        if (result.status === "error") return;
-      }
-    } catch (error) {
-      if (run !== pollingRun) return;
-      status.value = "error";
-      message.value =
-        typeof error === "string"
-          ? error
-          : error instanceof Error
-            ? error.message
-            : "网页登录服务暂时不可用";
-    } finally {
-      if (run === pollingRun) loading.value = false;
-    }
-  }
-
-  function cancelWebLogin() {
-    pollingRun += 1;
-    webLoginMode.value = false;
-    status.value = "loggedOut";
-    message.value = "使用手机 QQ 扫码登录";
-    loading.value = false;
-  }
-
   async function logout() {
     pollingRun += 1;
     loading.value = true;
@@ -181,5 +124,5 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  return { dialogVisible, loading, qrImage, status, message, user, webLoginMode, loggedIn, restoreSession, openLogin, closeLogin, refreshQrCode, startWebLogin, cancelWebLogin, logout };
+  return { dialogVisible, loading, qrImage, status, message, user, loggedIn, restoreSession, openLogin, closeLogin, refreshQrCode, logout };
 });
