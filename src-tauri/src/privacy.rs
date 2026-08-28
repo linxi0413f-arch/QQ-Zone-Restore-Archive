@@ -44,6 +44,16 @@ fn remove_dir_if_exists(path: &PathBuf, label: &str) -> Result<bool, String> {
     Ok(true)
 }
 
+fn table_exists(connection: &Connection, table: &str) -> Result<bool, String> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            params![table],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| format!("检查本地数据表失败：{error}"))
+}
+
 #[tauri::command]
 pub async fn get_privacy_status(
     app: tauri::AppHandle,
@@ -84,28 +94,48 @@ pub async fn delete_current_account_data(
     if database.exists() {
         let mut connection = Connection::open(&database)
             .map_err(|error| format!("无法打开本地归档数据库：{error}"))?;
+        connection
+            .execute_batch("PRAGMA secure_delete=ON; PRAGMA foreign_keys=ON;")
+            .map_err(|error| format!("启用安全删除模式失败：{error}"))?;
+
+        let existing_tables = [
+            ("archive_feeds", "互动记录"),
+            ("archive_dynamics", "动态记录"),
+            ("archive_checkpoints", "续传记录"),
+            ("archive_rate_limits", "频率记录"),
+            ("archive_skips", "异常跳过记录"),
+        ]
+        .into_iter()
+        .filter_map(|(table, label)| match table_exists(&connection, table) {
+            Ok(true) => Some(Ok((table, label))),
+            Ok(false) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
         let transaction = connection
             .transaction()
             .map_err(|error| format!("开始本地数据删除事务失败：{error}"))?;
 
-        // Delete interaction rows before dynamics so future foreign keys can be
-        // introduced without changing the deletion order.
-        for (table, sql) in [
-            ("互动记录", "DELETE FROM archive_feeds WHERE owner_uin=?1"),
-            ("动态记录", "DELETE FROM archive_dynamics WHERE owner_uin=?1"),
-            ("续传记录", "DELETE FROM archive_checkpoints WHERE owner_uin=?1"),
-            ("频率记录", "DELETE FROM archive_rate_limits WHERE owner_uin=?1"),
-            ("异常跳过记录", "DELETE FROM archive_skips WHERE owner_uin=?1"),
-        ] {
+        // Interaction rows are removed before dynamics so the order also works
+        // if a future schema adds foreign keys between these tables.
+        for (table, label) in existing_tables {
+            let sql = format!("DELETE FROM {table} WHERE owner_uin=?1");
             let affected = transaction
-                .execute(sql, params![owner_uin])
-                .map_err(|error| format!("删除{table}失败：{error}"))?;
+                .execute(&sql, params![owner_uin])
+                .map_err(|error| format!("删除{label}失败：{error}"))?;
             deleted_rows = deleted_rows.saturating_add(affected as u64);
         }
 
         transaction
             .commit()
             .map_err(|error| format!("提交本地数据删除事务失败：{error}"))?;
+
+        // Secure-delete overwrites deleted cells, then checkpoint/VACUUM rewrites
+        // the database so deleted QQ content is not left in free pages or WAL.
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|error| format!("压缩并清理本地数据库残留失败：{error}"))?;
     }
 
     // Older upstream builds store downloaded media in shared cache folders.
