@@ -26,8 +26,6 @@ pub fn run() {
             qlogin::get_login_status,
             qlogin::get_login_user,
             qlogin::logout_qzone,
-            qlogin::open_web_login,
-            qlogin::check_web_login,
             privacy::get_privacy_status,
             privacy::delete_current_account_data,
             qzone::fetch_first_feeds,
