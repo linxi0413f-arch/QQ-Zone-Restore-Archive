@@ -34,17 +34,12 @@ const router = createRouter({
       meta: { title: "归档任务" },
     },
     {
-      path: "/recycle-bin",
-      name: "recycle-bin",
-      component: () => import("../views/RecycleBinView.vue"),
-      meta: { title: "相册回收站" },
-    },
-    {
       path: "/settings",
       name: "settings",
       component: () => import("../views/SettingsView.vue"),
       meta: { title: "设置" },
     },
+    { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
 });
 
